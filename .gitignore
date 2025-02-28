@@ -1,0 +1,40 @@
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Test binary, built with 'go test -c'
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
+*.db
+*.db-journal
+/bin/
+/dist/
+/tmp/
+
+# Debug files
+debug/
+
+# Environment files
+.env
+.env.local
+*.env.local 

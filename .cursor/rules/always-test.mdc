@@ -1,0 +1,10 @@
+---
+description: 
+globs: *.go
+alwaysApply: false
+---
+For your workflow, you should always:
+1. Write tests for any new functionality
+2. Update existing tests when modifying functionality
+3. Run tests before committing changes
+Consider the design and constraints in [DESIGN.md](mdc:DESIGN.md)
