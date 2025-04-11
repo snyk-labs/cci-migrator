@@ -1,7 +1,7 @@
 # CCI Migrator Design Document
 
 ## Overview
-The CCI Migrator is a Go program designed to facilitate the migration of Snyk v1 API ignores to Snyk's new Consistent Ignores system using the Policy API. This tool handles the complex process of preserving existing ignores while transitioning to the new system.
+The CCI Migrator is a Go program designed to facilitate the migration of Snyk v1 API SAST ignores to Snyk's new Consistent Ignores system using the Policy API. This tool handles the complex process of preserving existing SAST ignores while transitioning to the new system.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ Using SQLite (embedded) with the following schema:
 ```sql
 CREATE TABLE ignores (
     id TEXT PRIMARY KEY,           -- Original ignore ID
-    issue_id TEXT,                 -- Original issue ID
+    issue_id TEXT,                 -- Original SAST issue ID
     org_id TEXT,                   -- Organization ID
     project_id TEXT,               -- Project ID
     reason TEXT,                   -- Original ignore reason
@@ -37,10 +37,10 @@ CREATE TABLE collection_metadata (
 ## Migration Process
 
 ### Phase 1: Data Collection (Source of Truth)
-1. **Collect V1 Ignores**
-   - Call Snyk V1 API to get all SAST ignores
+1. **Collect V1 SAST Ignores**
+   - Call Snyk V1 API to get all SAST ignores (filtering for SAST projects only)
    - Store complete ignore state in database
-   - For each ignore:
+   - For each SAST ignore:
      - Store full API response in `original_state`
      - Extract and store normalized fields
      - Fetch code details using Code Details API
@@ -121,6 +121,7 @@ Global Options:
   --api-token       Snyk API Token
   --db-path         Path to SQLite database (default: ./cci-migration.db)
   --backup-path     Path to backup directory (default: ./backups)
+  --project-type    Project type to migrate (default: sast, only sast supported currently)
 ```
 
 ## Implementation Phases

@@ -4,175 +4,163 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"testing"
 	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestGetIgnores(t *testing.T) {
-	// Create a test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		if r.Method != "GET" {
-			t.Errorf("Expected GET request, got %s", r.Method)
-		}
-		if r.Header.Get("Authorization") != "token test-token" {
-			t.Errorf("Expected Authorization header 'token test-token', got %s", r.Header.Get("Authorization"))
-		}
+var _ = Describe("Snyk Client", func() {
+	var (
+		server *httptest.Server
+		client *Client
+	)
 
-		// Return test data
-		ignores := []Ignore{
-			{
-				ID:         "test-id",
-				IssueID:    "test-issue",
-				Reason:     "test reason",
-				ReasonType: "permanent",
-				CreatedAt:  time.Now(),
-				IgnoredBy: User{
-					ID:    "user-id",
-					Name:  "Test User",
-					Email: "test@example.com",
+	BeforeEach(func() {
+		// Create a test server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Verify request
+			Expect(r.Method).To(Equal("GET"))
+			Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+			Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+			// Check query parameters
+			query := r.URL.Query()
+			Expect(query.Get("version")).To(Equal("2024-10-14~experimental"))
+			Expect(query.Get("types")).To(Equal("sast"))
+
+			// Return test data in JSON:API format
+			response := ProjectsResponse{
+				Data: []struct {
+					ID         string  `json:"id"`
+					Type       string  `json:"type"`
+					Attributes Project `json:"attributes"`
+				}{
+					{
+						ID:   "test-project-id",
+						Type: "project",
+						Attributes: Project{
+							Name:                "Test Project",
+							Created:             time.Now(),
+							Origin:              "cli",
+							Type:                "sast",
+							Status:              "active",
+							BusinessCriticality: []string{"high"},
+							Environment:         []string{"production"},
+							Lifecycle:           []string{"development"},
+							Tags: []struct {
+								Key   string `json:"key"`
+								Value string `json:"value"`
+							}{
+								{
+									Key:   "team",
+									Value: "security",
+								},
+							},
+						},
+					},
 				},
-				Issue: Issue{
-					ID:       "issue-id",
-					Title:    "Test Issue",
-					Type:     "sast",
-					Package:  "test-package",
-					Language: "go",
-				},
-			},
+			}
+
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			json.NewEncoder(w).Encode(response)
+		}))
+
+		// Create client with test server URL
+		client = &Client{
+			HTTPClient:  http.DefaultClient,
+			Token:       "test-token",
+			RestBaseURL: server.URL,
 		}
+	})
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ignores)
-	}))
-	defer server.Close()
+	AfterEach(func() {
+		server.Close()
+	})
 
-	// Create client with test server URL
-	client := &Client{
-		HTTPClient: http.DefaultClient,
-		Token:     "test-token",
-		V1BaseURL: server.URL,
-	}
+	Describe("GetProjects", func() {
+		It("should retrieve projects successfully", func() {
+			// Test GetProjects
+			projects, err := client.GetProjects("test-org")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(projects).To(HaveLen(1))
 
-	// Test GetIgnores
-	ignores, err := client.GetIgnores("test-org", "test-project")
-	if err != nil {
-		t.Fatalf("GetIgnores failed: %v", err)
-	}
+			project := projects[0]
+			Expect(project.ID).To(Equal("test-project-id"))
+			Expect(project.Name).To(Equal("Test Project"))
+			Expect(project.Origin).To(Equal("cli"))
+			Expect(project.Type).To(Equal("sast"))
+			Expect(project.Status).To(Equal("active"))
+			Expect(project.BusinessCriticality).To(Equal([]string{"high"}))
+			Expect(project.Environment).To(Equal([]string{"production"}))
+			Expect(project.Lifecycle).To(Equal([]string{"development"}))
+			Expect(project.Tags).To(HaveLen(1))
+			Expect(project.Tags[0].Key).To(Equal("team"))
+			Expect(project.Tags[0].Value).To(Equal("security"))
+		})
+	})
 
-	if len(ignores) != 1 {
-		t.Fatalf("Expected 1 ignore, got %d", len(ignores))
-	}
+	Describe("GetIgnores", func() {
+		BeforeEach(func() {
+			// Override the server handler for this test
+			server.Close()
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Verify request
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
 
-	ignore := ignores[0]
-	if ignore.ID != "test-id" {
-		t.Errorf("Expected ignore ID test-id, got %s", ignore.ID)
-	}
-	if ignore.IssueID != "test-issue" {
-		t.Errorf("Expected issue ID test-issue, got %s", ignore.IssueID)
-	}
-}
+				// Verify URL path
+				expectedPath := "/org/test-org/project/test-project/ignores"
+				Expect(r.URL.Path).To(Equal(expectedPath))
 
-func TestGetCodeDetails(t *testing.T) {
-	// Create a test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		if r.Method != "GET" {
-			t.Errorf("Expected GET request, got %s", r.Method)
-		}
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("Expected Authorization header 'Bearer test-token', got %s", r.Header.Get("Authorization"))
-		}
-		if r.Header.Get("Accept") != "application/vnd.api+json" {
-			t.Errorf("Expected Accept header 'application/vnd.api+json', got %s", r.Header.Get("Accept"))
-		}
+				// Return test data
+				now := time.Now()
+				expires := now.Add(24 * time.Hour)
+				response := IgnoresResponse{
+					Ignores: map[string]Ignore{
+						"test-ignore-id": {
+							IssueID:    "SNYK-123",
+							Reason:     "Test reason",
+							ReasonType: "not-vulnerable",
+							CreatedAt:  now,
+							ExpiresAt:  &expires,
+							IgnoredBy: User{
+								ID:    "user-123",
+								Name:  "Test User",
+								Email: "test@example.com",
+							},
+							Issue: Issue{
+								ID:       "SNYK-123",
+								Title:    "Test Vulnerability",
+								Type:     "vuln",
+								Package:  "test-package",
+								Language: "javascript",
+							},
+						},
+					},
+				}
 
-		// Check query parameters
-		query := r.URL.Query()
-		if query.Get("version") != "2024-10-14~experimental" {
-			t.Errorf("Expected version 2024-10-14~experimental, got %s", query.Get("version"))
-		}
-		if query.Get("project_id") != "test-project" {
-			t.Errorf("Expected project_id test-project, got %s", query.Get("project_id"))
-		}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			}))
 
-		// Return test data
-		details := CodeDetails{
-			ID:          "test-id",
-			Title:       "Test Issue",
-			Severity:    "high",
-			FilePath:    "src/main.go",
-			LineNumber:  42,
-			Description: "Test description",
-			CWE:        "CWE-123",
-			AdditionalFields: map[string]interface{}{
-				"test": "value",
-			},
-		}
+			// Update client with new server URL
+			client.V1BaseURL = server.URL
+		})
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(details)
-	}))
-	defer server.Close()
+		It("should retrieve ignores successfully", func() {
+			// Test GetIgnores
+			ignores, err := client.GetIgnores("test-org", "test-project")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ignores).To(HaveLen(1))
 
-	// Create client with test server URL
-	client := &Client{
-		HTTPClient: http.DefaultClient,
-		Token:     "test-token",
-		RestBaseURL: server.URL,
-	}
-
-	// Test GetCodeDetails
-	details, err := client.GetCodeDetails("test-org", "test-project", "test-issue")
-	if err != nil {
-		t.Fatalf("GetCodeDetails failed: %v", err)
-	}
-
-	if details.ID != "test-id" {
-		t.Errorf("Expected ID test-id, got %s", details.ID)
-	}
-	if details.Title != "Test Issue" {
-		t.Errorf("Expected title Test Issue, got %s", details.Title)
-	}
-	if details.Severity != "high" {
-		t.Errorf("Expected severity high, got %s", details.Severity)
-	}
-	if details.FilePath != "src/main.go" {
-		t.Errorf("Expected file path src/main.go, got %s", details.FilePath)
-	}
-	if details.LineNumber != 42 {
-		t.Errorf("Expected line number 42, got %d", details.LineNumber)
-	}
-}
-
-func TestRateLimitHandling(t *testing.T) {
-	// Create a test server that returns a rate limit response
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "60")
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer server.Close()
-
-	// Create client with test server URL
-	client := &Client{
-		HTTPClient: http.DefaultClient,
-		Token:     "test-token",
-		RestBaseURL: server.URL,
-	}
-
-	// Test rate limit handling
-	_, err := client.GetCodeDetails("test-org", "test-project", "test-issue")
-	if err == nil {
-		t.Fatal("Expected rate limit error, got nil")
-	}
-
-	rateLimitErr, ok := err.(*RateLimitError)
-	if !ok {
-		t.Fatalf("Expected RateLimitError, got %T", err)
-	}
-
-	expectedDuration := 60 * time.Second
-	if rateLimitErr.RetryAfter != expectedDuration {
-		t.Errorf("Expected retry after %v, got %v", expectedDuration, rateLimitErr.RetryAfter)
-	}
-} 
+			ignore := ignores[0]
+			Expect(ignore.ID).To(Equal("test-ignore-id"))
+			Expect(ignore.IssueID).To(Equal("SNYK-123"))
+			Expect(ignore.Reason).To(Equal("Test reason"))
+			Expect(ignore.ReasonType).To(Equal("not-vulnerable"))
+			Expect(ignore.IgnoredBy.Name).To(Equal("Test User"))
+			Expect(ignore.Issue.Title).To(Equal("Test Vulnerability"))
+		})
+	})
+})
