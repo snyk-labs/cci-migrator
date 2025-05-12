@@ -1,0 +1,393 @@
+package commands_test
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/z4ce/cci-migrator/internal/commands"
+	"github.com/z4ce/cci-migrator/internal/database"
+	"github.com/z4ce/cci-migrator/internal/snyk"
+)
+
+var _ = Describe("Gather Command", func() {
+	var (
+		mockDB     *MockDB
+		mockClient *MockClient
+		cmd        *commands.GatherCommand
+	)
+
+	BeforeEach(func() {
+		mockDB = NewMockDB()
+		mockClient = NewMockClient()
+		cmd = commands.NewGatherCommand(mockDB, mockClient, "test-org-id")
+	})
+
+	Describe("Execute", func() {
+		It("should gather projects, ignores, and issues", func() {
+			// Set up mock client responses
+			mockClient.GetProjectsFunc = func(orgID string) ([]snyk.Project, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				return []snyk.Project{
+					{
+						ID:   "test-project-id",
+						Name: "Test Project",
+						Type: "sast",
+					},
+				}, nil
+			}
+
+			mockClient.GetProjectTargetFunc = func(orgID, projectID string) (*snyk.Target, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(projectID).To(Equal("test-project-id"))
+				return &snyk.Target{
+					Name:   "test-repo",
+					Branch: "main",
+				}, nil
+			}
+
+			mockClient.GetIgnoresFunc = func(orgID, projectID string) ([]snyk.Ignore, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(projectID).To(Equal("test-project-id"))
+				return []snyk.Ignore{
+					{
+						ID:         "test-ignore-id",
+						IssueID:    "test-issue-id",
+						Reason:     "test reason",
+						ReasonType: "wont-fix",
+						CreatedAt:  time.Now(),
+						Issue: snyk.Issue{
+							ID:   "test-issue-id",
+							Type: "code",
+						},
+					},
+				}, nil
+			}
+
+			mockClient.GetSASTIssuesFunc = func(orgID, projectID string) ([]snyk.SASTIssue, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(projectID).To(Equal("test-project-id"))
+				return []snyk.SASTIssue{
+					{
+						ID:        "test-issue-id",
+						AssetKey:  "test-asset-key",
+						IsIgnored: true,
+						ProjectID: "test-project-id",
+					},
+				}, nil
+			}
+
+			// Set up mock QueryRow results
+			mockDB.QueryRowFunc = func(query string, args ...interface{}) *sql.Row {
+				// Create a mock DB connection to get a real sql.Row
+				db, _ := sql.Open("sqlite3", ":memory:")
+				defer db.Close()
+
+				// Create a simple table for the query
+				db.Exec("CREATE TABLE collection_metadata (count INTEGER)")
+				db.Exec("INSERT INTO collection_metadata VALUES (1)")
+
+				// Return a real sql.Row
+				return db.QueryRow("SELECT 1")
+			}
+
+			// Set up mock Query results for Print method
+			mockDB.QueryFunc = func(query string, args ...interface{}) (interface{}, error) {
+				return &MockRows{}, nil
+			}
+
+			// Execute the command
+			err := cmd.Execute()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify that projects were stored
+			Expect(mockDB.InsertProjectCalls).To(HaveLen(1))
+			project := mockDB.InsertProjectCalls[0]
+			Expect(project.ID).To(Equal("test-project-id"))
+			Expect(project.OrgID).To(Equal("test-org-id"))
+			Expect(project.Name).To(Equal("Test Project"))
+
+			// Verify target was stored
+			var target snyk.Target
+			err = json.Unmarshal([]byte(project.TargetInformation), &target)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(target.Name).To(Equal("test-repo"))
+			Expect(target.Branch).To(Equal("main"))
+
+			// Verify that ignores were stored
+			Expect(mockDB.InsertIgnoreCalls).To(HaveLen(1))
+			ignore := mockDB.InsertIgnoreCalls[0]
+			Expect(ignore.ID).To(Equal("test-ignore-id"))
+			Expect(ignore.IssueID).To(Equal("test-issue-id"))
+			Expect(ignore.OrgID).To(Equal("test-org-id"))
+			Expect(ignore.ProjectID).To(Equal("test-project-id"))
+			Expect(ignore.Reason).To(Equal("test reason"))
+			Expect(ignore.IgnoreType).To(Equal("wont-fix"))
+
+			// Verify that issues were stored
+			Expect(mockDB.InsertIssueCalls).To(HaveLen(1))
+			issue := mockDB.InsertIssueCalls[0]
+			Expect(issue.ID).To(Equal("test-issue-id"))
+			Expect(issue.OrgID).To(Equal("test-org-id"))
+			Expect(issue.ProjectID).To(Equal("test-project-id"))
+			Expect(issue.AssetKey).To(Equal("test-asset-key"))
+
+			// Verify that asset keys were updated in ignores
+			execCallFound := false
+			for _, call := range mockDB.ExecCalls {
+				if len(call.Args) == 4 &&
+					call.Args[0] == "test-asset-key" &&
+					call.Args[1] == "test-issue-id" &&
+					call.Args[2] == "test-org-id" &&
+					call.Args[3] == "test-project-id" {
+					execCallFound = true
+					break
+				}
+			}
+			Expect(execCallFound).To(BeTrue(), "Expected to find an Exec call updating asset key")
+
+			// Verify that collection metadata was updated
+			Expect(mockDB.UpdateCollectionMetadataCalls).To(HaveLen(1))
+		})
+
+		It("should handle API errors gracefully", func() {
+			// Set up mock client to return an error
+			mockClient.GetProjectsFunc = func(orgID string) ([]snyk.Project, error) {
+				return nil, errors.New("API error")
+			}
+
+			// Execute the command
+			err := cmd.Execute()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to get projects: API error"))
+		})
+	})
+})
+
+// Mock Row for database query row results
+type MockRow struct {
+	scanFunc func(dest ...interface{}) error
+}
+
+func (m *MockRow) Scan(dest ...interface{}) error {
+	return m.scanFunc(dest...)
+}
+
+// Mock Rows for database query results
+type MockRows struct {
+	nextIndex int
+	rows      [][]interface{}
+	columns   []string
+	closed    bool
+}
+
+func (m *MockRows) Next() bool {
+	if m.nextIndex >= len(m.rows) {
+		return false
+	}
+	m.nextIndex++
+	return true
+}
+
+func (m *MockRows) Scan(dest ...interface{}) error {
+	if m.nextIndex == 0 || m.nextIndex > len(m.rows) {
+		return errors.New("invalid row index")
+	}
+
+	row := m.rows[m.nextIndex-1]
+	for i, val := range row {
+		if i < len(dest) {
+			switch v := dest[i].(type) {
+			case *string:
+				if s, ok := val.(string); ok {
+					*v = s
+				}
+			case *int:
+				if n, ok := val.(int); ok {
+					*v = n
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (m *MockRows) Close() error {
+	m.closed = true
+	return nil
+}
+
+// Mock DB implementation
+type MockDB struct {
+	GetIgnoresByOrgIDCalls        []string
+	InsertIgnoreCalls             []*database.Ignore
+	InsertIssueCalls              []*database.Issue
+	InsertProjectCalls            []*database.Project
+	UpdateCollectionMetadataCalls []struct{}
+	ExecCalls                     []MockExecCall
+	GetIgnoresByOrgIDFunc         func(orgID string) ([]*database.Ignore, error)
+	InsertIgnoreFunc              func(ignore *database.Ignore) error
+	InsertIssueFunc               func(issue *database.Issue) error
+	InsertProjectFunc             func(project *database.Project) error
+	InsertPolicyFunc              func(policy *database.Policy) error
+	GetIssuesByOrgIDFunc          func(orgID string) ([]*database.Issue, error)
+	GetProjectsByOrgIDFunc        func(orgID string) ([]*database.Project, error)
+	GetPoliciesByOrgIDFunc        func(orgID string) ([]*database.Policy, error)
+	UpdateCollectionMetadataFunc  func(time.Time, string, string) error
+	ExecFunc                      func(query string, args ...interface{}) (interface{}, error)
+	QueryRowFunc                  func(query string, args ...interface{}) *sql.Row
+	QueryFunc                     func(query string, args ...interface{}) (interface{}, error)
+}
+
+type MockExecCall struct {
+	Query string
+	Args  []interface{}
+}
+
+func NewMockDB() *MockDB {
+	// Create a mock DB connection to get a real sql.Row for the default QueryRowFunc
+	sqlDB, _ := sql.Open("sqlite3", ":memory:")
+
+	return &MockDB{
+		GetIgnoresByOrgIDCalls:        []string{},
+		InsertIgnoreCalls:             []*database.Ignore{},
+		InsertIssueCalls:              []*database.Issue{},
+		InsertProjectCalls:            []*database.Project{},
+		UpdateCollectionMetadataCalls: []struct{}{},
+		ExecCalls:                     []MockExecCall{},
+		GetIgnoresByOrgIDFunc:         func(orgID string) ([]*database.Ignore, error) { return []*database.Ignore{}, nil },
+		InsertIgnoreFunc:              func(ignore *database.Ignore) error { return nil },
+		InsertIssueFunc:               func(issue *database.Issue) error { return nil },
+		InsertProjectFunc:             func(project *database.Project) error { return nil },
+		InsertPolicyFunc:              func(policy *database.Policy) error { return nil },
+		GetIssuesByOrgIDFunc:          func(orgID string) ([]*database.Issue, error) { return []*database.Issue{}, nil },
+		GetProjectsByOrgIDFunc:        func(orgID string) ([]*database.Project, error) { return []*database.Project{}, nil },
+		GetPoliciesByOrgIDFunc:        func(orgID string) ([]*database.Policy, error) { return []*database.Policy{}, nil },
+		UpdateCollectionMetadataFunc:  func(time.Time, string, string) error { return nil },
+		ExecFunc:                      func(query string, args ...interface{}) (interface{}, error) { return nil, nil },
+		QueryRowFunc:                  func(query string, args ...interface{}) *sql.Row { return sqlDB.QueryRow("SELECT 1") },
+		QueryFunc:                     func(query string, args ...interface{}) (interface{}, error) { return nil, nil },
+	}
+}
+
+func (m *MockDB) GetIgnoresByOrgID(orgID string) ([]*database.Ignore, error) {
+	m.GetIgnoresByOrgIDCalls = append(m.GetIgnoresByOrgIDCalls, orgID)
+	return m.GetIgnoresByOrgIDFunc(orgID)
+}
+
+func (m *MockDB) InsertIgnore(ignore *database.Ignore) error {
+	m.InsertIgnoreCalls = append(m.InsertIgnoreCalls, ignore)
+	return m.InsertIgnoreFunc(ignore)
+}
+
+func (m *MockDB) InsertIssue(issue *database.Issue) error {
+	m.InsertIssueCalls = append(m.InsertIssueCalls, issue)
+	return m.InsertIssueFunc(issue)
+}
+
+func (m *MockDB) InsertProject(project *database.Project) error {
+	m.InsertProjectCalls = append(m.InsertProjectCalls, project)
+	return m.InsertProjectFunc(project)
+}
+
+func (m *MockDB) UpdateCollectionMetadata(completedAt time.Time, collectionVersion, apiVersion string) error {
+	m.UpdateCollectionMetadataCalls = append(m.UpdateCollectionMetadataCalls, struct{}{})
+	return m.UpdateCollectionMetadataFunc(completedAt, collectionVersion, apiVersion)
+}
+
+func (m *MockDB) Exec(query string, args ...interface{}) (interface{}, error) {
+	m.ExecCalls = append(m.ExecCalls, MockExecCall{Query: query, Args: args})
+	return m.ExecFunc(query, args...)
+}
+
+func (m *MockDB) QueryRow(query string, args ...interface{}) *sql.Row {
+	return m.QueryRowFunc(query, args...)
+}
+
+func (m *MockDB) Query(query string, args ...interface{}) (interface{}, error) {
+	return m.QueryFunc(query, args...)
+}
+
+func (m *MockDB) Close() error {
+	return nil
+}
+
+// InsertPolicy implements the DatabaseInterface
+func (m *MockDB) InsertPolicy(policy *database.Policy) error {
+	return m.InsertPolicyFunc(policy)
+}
+
+// GetIssuesByOrgID implements the DatabaseInterface
+func (m *MockDB) GetIssuesByOrgID(orgID string) ([]*database.Issue, error) {
+	return m.GetIssuesByOrgIDFunc(orgID)
+}
+
+// GetProjectsByOrgID implements the DatabaseInterface
+func (m *MockDB) GetProjectsByOrgID(orgID string) ([]*database.Project, error) {
+	return m.GetProjectsByOrgIDFunc(orgID)
+}
+
+// GetPoliciesByOrgID implements the DatabaseInterface
+func (m *MockDB) GetPoliciesByOrgID(orgID string) ([]*database.Policy, error) {
+	return m.GetPoliciesByOrgIDFunc(orgID)
+}
+
+// Mock Client implementation
+type MockClient struct {
+	GetProjectsFunc      func(orgID string) ([]snyk.Project, error)
+	GetIgnoresFunc       func(orgID, projectID string) ([]snyk.Ignore, error)
+	GetProjectTargetFunc func(orgID, projectID string) (*snyk.Target, error)
+	GetSASTIssuesFunc    func(orgID, projectID string) ([]snyk.SASTIssue, error)
+	CreatePolicyFunc     func(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error)
+	RetestProjectFunc    func(orgID, projectID string, target *snyk.Target) error
+	DeleteIgnoreFunc     func(orgID, projectID, ignoreID string) error
+}
+
+func NewMockClient() *MockClient {
+	return &MockClient{
+		GetProjectsFunc:      func(orgID string) ([]snyk.Project, error) { return []snyk.Project{}, nil },
+		GetIgnoresFunc:       func(orgID, projectID string) ([]snyk.Ignore, error) { return []snyk.Ignore{}, nil },
+		GetProjectTargetFunc: func(orgID, projectID string) (*snyk.Target, error) { return &snyk.Target{}, nil },
+		GetSASTIssuesFunc:    func(orgID, projectID string) ([]snyk.SASTIssue, error) { return []snyk.SASTIssue{}, nil },
+		CreatePolicyFunc: func(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error) {
+			return "", nil
+		},
+		RetestProjectFunc: func(orgID, projectID string, target *snyk.Target) error { return nil },
+		DeleteIgnoreFunc:  func(orgID, projectID, ignoreID string) error { return nil },
+	}
+}
+
+func (m *MockClient) GetProjects(orgID string) ([]snyk.Project, error) {
+	return m.GetProjectsFunc(orgID)
+}
+
+func (m *MockClient) GetIgnores(orgID, projectID string) ([]snyk.Ignore, error) {
+	return m.GetIgnoresFunc(orgID, projectID)
+}
+
+func (m *MockClient) GetProjectTarget(orgID, projectID string) (*snyk.Target, error) {
+	return m.GetProjectTargetFunc(orgID, projectID)
+}
+
+func (m *MockClient) GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, error) {
+	return m.GetSASTIssuesFunc(orgID, projectID)
+}
+
+// CreatePolicy implements the ClientInterface
+func (m *MockClient) CreatePolicy(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error) {
+	return m.CreatePolicyFunc(orgID, assetKey, policyType, reason, expiresAt)
+}
+
+// RetestProject implements the ClientInterface
+func (m *MockClient) RetestProject(orgID, projectID string, target *snyk.Target) error {
+	return m.RetestProjectFunc(orgID, projectID, target)
+}
+
+// DeleteIgnore implements the ClientInterface
+func (m *MockClient) DeleteIgnore(orgID, projectID, ignoreID string) error {
+	return m.DeleteIgnoreFunc(orgID, projectID, ignoreID)
+}

@@ -30,14 +30,14 @@ var _ = Describe("Database", func() {
 	It("should insert and retrieve ignores correctly", func() {
 		// Test inserting and retrieving an ignore
 		testIgnore := &Ignore{
-			ID:          "test-id",
-			IssueID:     "test-issue",
-			OrgID:       "test-org",
-			ProjectID:   "test-project",
-			Reason:      "test reason",
-			IgnoreType:  "permanent",
-			CreatedAt:   time.Now(),
-			Fingerprint: "test-fingerprint",
+			ID:         "test-id",
+			IssueID:    "test-issue",
+			OrgID:      "test-org",
+			ProjectID:  "test-project",
+			Reason:     "test reason",
+			IgnoreType: "permanent",
+			CreatedAt:  time.Now(),
+			AssetKey:   "test-asset-key",
 		}
 
 		// Test InsertIgnore

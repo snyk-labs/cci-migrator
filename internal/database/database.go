@@ -8,24 +8,41 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB represents our database connection
+// DB wraps a sql.DB connection
 type DB struct {
 	*sql.DB
 }
 
-// New creates a new database connection and initializes the schema
+// New creates a new database connection
 func New(dbPath string) (*DB, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	sqlDB, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, err
 	}
 
-	if err := initSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+	db := &DB{sqlDB}
+
+	// Initialize schema
+	if err := initSchema(sqlDB); err != nil {
+		return nil, err
 	}
 
-	return &DB{db}, nil
+	return db, nil
+}
+
+// Exec executes a query without returning any rows
+func (db *DB) Exec(query string, args ...interface{}) (interface{}, error) {
+	return db.DB.Exec(query, args...)
+}
+
+// QueryRow executes a query that is expected to return at most one row
+func (db *DB) QueryRow(query string, args ...interface{}) *sql.Row {
+	return db.DB.QueryRow(query, args...)
+}
+
+// Query executes a query that returns rows
+func (db *DB) Query(query string, args ...interface{}) (interface{}, error) {
+	return db.DB.Query(query, args...)
 }
 
 // initSchema creates the database tables if they don't exist
@@ -40,12 +57,41 @@ func initSchema(db *sql.DB) error {
 		ignore_type TEXT,
 		created_at TIMESTAMP,
 		expires_at TIMESTAMP,
-		fingerprint TEXT,
-		finding_id TEXT,
+		asset_key TEXT,
 		original_state TEXT,
 		deleted_at TIMESTAMP,
 		migrated_at TIMESTAMP,
-		policy_id TEXT
+		policy_id TEXT,
+		internal_policy_id TEXT,
+		selected_for_migration BOOLEAN DEFAULT 0
+	);
+
+	CREATE TABLE IF NOT EXISTS issues (
+		id TEXT PRIMARY KEY,
+		org_id TEXT,
+		project_id TEXT,
+		asset_key TEXT,
+		original_state TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS projects (
+		id TEXT PRIMARY KEY,
+		org_id TEXT,
+		name TEXT,
+		target_information TEXT,
+		retested_at TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS policies (
+		internal_id TEXT PRIMARY KEY,
+		org_id TEXT,
+		asset_key TEXT,
+		policy_type TEXT,
+		reason TEXT,
+		expires_at TIMESTAMP,
+		source_ignores TEXT,
+		external_id TEXT,
+		created_at TIMESTAMP
 	);
 
 	CREATE TABLE IF NOT EXISTS collection_metadata (
@@ -56,7 +102,11 @@ func initSchema(db *sql.DB) error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_ignores_org_project ON ignores(org_id, project_id);
-	CREATE INDEX IF NOT EXISTS idx_ignores_fingerprint ON ignores(fingerprint);
+	CREATE INDEX IF NOT EXISTS idx_ignores_asset_key ON ignores(asset_key);
+	CREATE INDEX IF NOT EXISTS idx_issues_asset_key ON issues(asset_key);
+	CREATE INDEX IF NOT EXISTS idx_issues_org_project ON issues(org_id, project_id);
+	CREATE INDEX IF NOT EXISTS idx_policies_asset_key ON policies(asset_key);
+	CREATE INDEX IF NOT EXISTS idx_projects_org_id ON projects(org_id);
 	`
 
 	_, err := db.Exec(schema)
@@ -65,20 +115,52 @@ func initSchema(db *sql.DB) error {
 
 // Ignore represents a row in the ignores table
 type Ignore struct {
-	ID            string     `json:"id"`
-	IssueID       string     `json:"issue_id"`
+	ID                   string     `json:"id"`
+	IssueID              string     `json:"issue_id"`
+	OrgID                string     `json:"org_id"`
+	ProjectID            string     `json:"project_id"`
+	Reason               string     `json:"reason"`
+	IgnoreType           string     `json:"ignore_type"`
+	CreatedAt            time.Time  `json:"created_at"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	AssetKey             string     `json:"asset_key"`
+	OriginalState        string     `json:"original_state"`
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
+	MigratedAt           *time.Time `json:"migrated_at,omitempty"`
+	PolicyID             string     `json:"policy_id"`
+	InternalPolicyID     string     `json:"internal_policy_id"`
+	SelectedForMigration bool       `json:"selected_for_migration"`
+}
+
+// Issue represents a row in the issues table
+type Issue struct {
+	ID            string `json:"id"`
+	OrgID         string `json:"org_id"`
+	ProjectID     string `json:"project_id"`
+	AssetKey      string `json:"asset_key"`
+	OriginalState string `json:"original_state"`
+}
+
+// Project represents a row in the projects table
+type Project struct {
+	ID                string     `json:"id"`
+	OrgID             string     `json:"org_id"`
+	Name              string     `json:"name"`
+	TargetInformation string     `json:"target_information"`
+	RetestedAt        *time.Time `json:"retested_at,omitempty"`
+}
+
+// Policy represents a row in the policies table
+type Policy struct {
+	InternalID    string     `json:"internal_id"`
 	OrgID         string     `json:"org_id"`
-	ProjectID     string     `json:"project_id"`
+	AssetKey      string     `json:"asset_key"`
+	PolicyType    string     `json:"policy_type"`
 	Reason        string     `json:"reason"`
-	IgnoreType    string     `json:"ignore_type"`
-	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	Fingerprint   string     `json:"fingerprint"`
-	FindingID     string     `json:"finding_id"`
-	OriginalState string     `json:"original_state"`
-	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
-	MigratedAt    *time.Time `json:"migrated_at,omitempty"`
-	PolicyID      string     `json:"policy_id"`
+	SourceIgnores string     `json:"source_ignores"`
+	ExternalID    string     `json:"external_id"`
+	CreatedAt     *time.Time `json:"created_at,omitempty"`
 }
 
 // InsertIgnore inserts a new ignore into the database
@@ -86,18 +168,75 @@ func (db *DB) InsertIgnore(ignore *Ignore) error {
 	query := `
 		INSERT INTO ignores (
 			id, issue_id, org_id, project_id, reason, ignore_type,
-			created_at, expires_at, fingerprint, finding_id,
-			original_state, deleted_at, migrated_at, policy_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at, expires_at, asset_key, original_state, 
+			deleted_at, migrated_at, policy_id, internal_policy_id,
+			selected_for_migration
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := db.Exec(query,
+	fmt.Printf("Inserting ignore into database: ID=%s, IssueID=%s, OrgID=%s, ProjectID=%s\n",
+		ignore.ID, ignore.IssueID, ignore.OrgID, ignore.ProjectID)
+
+	result, err := db.DB.Exec(query,
 		ignore.ID, ignore.IssueID, ignore.OrgID, ignore.ProjectID,
 		ignore.Reason, ignore.IgnoreType, ignore.CreatedAt, ignore.ExpiresAt,
-		ignore.Fingerprint, ignore.FindingID, ignore.OriginalState,
-		ignore.DeletedAt, ignore.MigratedAt, ignore.PolicyID,
+		ignore.AssetKey, ignore.OriginalState,
+		ignore.DeletedAt, ignore.MigratedAt, ignore.PolicyID, ignore.InternalPolicyID,
+		ignore.SelectedForMigration,
 	)
 
+	if err != nil {
+		fmt.Printf("Error inserting ignore into database: %v\n", err)
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	fmt.Printf("Insert successful, rows affected: %d\n", rowsAffected)
+
+	return nil
+}
+
+// InsertIssue inserts a new issue into the database
+func (db *DB) InsertIssue(issue *Issue) error {
+	query := `
+		INSERT INTO issues (
+			id, org_id, project_id, asset_key, original_state
+		) VALUES (?, ?, ?, ?, ?)
+	`
+
+	_, err := db.DB.Exec(query,
+		issue.ID, issue.OrgID, issue.ProjectID, issue.AssetKey, issue.OriginalState,
+	)
+	return err
+}
+
+// InsertProject inserts a new project into the database
+func (db *DB) InsertProject(project *Project) error {
+	query := `
+		INSERT INTO projects (
+			id, org_id, name, target_information, retested_at
+		) VALUES (?, ?, ?, ?, ?)
+	`
+
+	_, err := db.DB.Exec(query,
+		project.ID, project.OrgID, project.Name, project.TargetInformation, project.RetestedAt,
+	)
+	return err
+}
+
+// InsertPolicy inserts a new policy into the database
+func (db *DB) InsertPolicy(policy *Policy) error {
+	query := `
+		INSERT INTO policies (
+			internal_id, org_id, asset_key, policy_type, reason,
+			expires_at, source_ignores, external_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := db.DB.Exec(query,
+		policy.InternalID, policy.OrgID, policy.AssetKey, policy.PolicyType, policy.Reason,
+		policy.ExpiresAt, policy.SourceIgnores, policy.ExternalID, policy.CreatedAt,
+	)
 	return err
 }
 
@@ -109,15 +248,15 @@ func (db *DB) UpdateCollectionMetadata(completedAt time.Time, collectionVersion,
 		) VALUES (?, ?, ?)
 	`
 
-	_, err := db.Exec(query, completedAt, collectionVersion, apiVersion)
+	_, err := db.DB.Exec(query, completedAt, collectionVersion, apiVersion)
 	return err
 }
 
 // GetIgnoresByOrgID retrieves all ignores for a given organization
 func (db *DB) GetIgnoresByOrgID(orgID string) ([]*Ignore, error) {
 	query := `SELECT * FROM ignores WHERE org_id = ?`
-	
-	rows, err := db.Query(query, orgID)
+
+	rows, err := db.DB.Query(query, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,8 +268,9 @@ func (db *DB) GetIgnoresByOrgID(orgID string) ([]*Ignore, error) {
 		err := rows.Scan(
 			&ignore.ID, &ignore.IssueID, &ignore.OrgID, &ignore.ProjectID,
 			&ignore.Reason, &ignore.IgnoreType, &ignore.CreatedAt, &ignore.ExpiresAt,
-			&ignore.Fingerprint, &ignore.FindingID, &ignore.OriginalState,
-			&ignore.DeletedAt, &ignore.MigratedAt, &ignore.PolicyID,
+			&ignore.AssetKey, &ignore.OriginalState,
+			&ignore.DeletedAt, &ignore.MigratedAt, &ignore.PolicyID, &ignore.InternalPolicyID,
+			&ignore.SelectedForMigration,
 		)
 		if err != nil {
 			return nil, err
@@ -139,4 +279,80 @@ func (db *DB) GetIgnoresByOrgID(orgID string) ([]*Ignore, error) {
 	}
 
 	return ignores, rows.Err()
-} 
+}
+
+// GetIssuesByOrgID retrieves all issues for a given organization
+func (db *DB) GetIssuesByOrgID(orgID string) ([]*Issue, error) {
+	query := `SELECT * FROM issues WHERE org_id = ?`
+
+	rows, err := db.DB.Query(query, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var issues []*Issue
+	for rows.Next() {
+		issue := &Issue{}
+		err := rows.Scan(
+			&issue.ID, &issue.OrgID, &issue.ProjectID, &issue.AssetKey, &issue.OriginalState,
+		)
+		if err != nil {
+			return nil, err
+		}
+		issues = append(issues, issue)
+	}
+
+	return issues, rows.Err()
+}
+
+// GetProjectsByOrgID retrieves all projects for a given organization
+func (db *DB) GetProjectsByOrgID(orgID string) ([]*Project, error) {
+	query := `SELECT * FROM projects WHERE org_id = ?`
+
+	rows, err := db.DB.Query(query, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []*Project
+	for rows.Next() {
+		project := &Project{}
+		err := rows.Scan(
+			&project.ID, &project.OrgID, &project.Name, &project.TargetInformation, &project.RetestedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+
+	return projects, rows.Err()
+}
+
+// GetPoliciesByOrgID retrieves all policies for a given organization
+func (db *DB) GetPoliciesByOrgID(orgID string) ([]*Policy, error) {
+	query := `SELECT * FROM policies WHERE org_id = ?`
+
+	rows, err := db.DB.Query(query, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var policies []*Policy
+	for rows.Next() {
+		policy := &Policy{}
+		err := rows.Scan(
+			&policy.InternalID, &policy.OrgID, &policy.AssetKey, &policy.PolicyType, &policy.Reason,
+			&policy.ExpiresAt, &policy.SourceIgnores, &policy.ExternalID, &policy.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		policies = append(policies, policy)
+	}
+
+	return policies, rows.Err()
+}

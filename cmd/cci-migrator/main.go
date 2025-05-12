@@ -16,10 +16,14 @@ func main() {
 	globalFlags := flag.NewFlagSet("cci-migrator", flag.ExitOnError)
 
 	var (
-		orgID      string
-		apiToken   string
-		dbPath     string
-		backupPath string
+		orgID       string
+		apiToken    string
+		dbPath      string
+		backupPath  string
+		projectType string
+		strategy    string
+		overrideCsv string
+		backupFile  string
 	)
 
 	// Set up global flags
@@ -27,6 +31,10 @@ func main() {
 	globalFlags.StringVar(&apiToken, "api-token", "", "Snyk API Token")
 	globalFlags.StringVar(&dbPath, "db-path", "./cci-migration.db", "Path to SQLite database")
 	globalFlags.StringVar(&backupPath, "backup-path", "./backups", "Path to backup directory")
+	globalFlags.StringVar(&projectType, "project-type", "sast", "Project type to migrate (only sast supported currently)")
+	globalFlags.StringVar(&strategy, "strategy", "priority-earliest", "Conflict resolution strategy")
+	globalFlags.StringVar(&overrideCsv, "override-csv", "", "Path to CSV with manual override mappings")
+	globalFlags.StringVar(&backupFile, "backup-file", "", "Specific backup file to restore (for restore command)")
 
 	// Check if we have any arguments
 	if len(os.Args) < 2 {
@@ -62,35 +70,66 @@ func main() {
 
 	// Execute the appropriate command
 	switch command {
-	case "collect":
-		cmd := commands.NewCollectCommand(db, client, orgID)
+	case "gather":
+		cmd := commands.NewGatherCommand(db, client, orgID)
 		if err := cmd.Execute(); err != nil {
-			log.Fatalf("Collection failed: %v", err)
+			log.Fatalf("Gather failed: %v", err)
 		}
 	case "verify":
-		fmt.Println("Starting verification...")
-		// TODO: Implement verification
+		cmd := commands.NewVerifyCommand(db, client, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Verification failed: %v", err)
+		}
+	case "print":
+		cmd := commands.NewGatherCommand(db, client, orgID)
+		if err := cmd.Print(); err != nil {
+			log.Fatalf("Print failed: %v", err)
+		}
 	case "backup":
-		fmt.Println("Creating backup...")
-		// TODO: Implement backup
+		cmd := commands.NewBackupCommand(db, dbPath, backupPath)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Backup failed: %v", err)
+		}
 	case "restore":
-		fmt.Println("Restoring from backup...")
-		// TODO: Implement restore
-	case "analyze":
-		fmt.Println("Starting SARIF analysis...")
-		// TODO: Implement analysis
-	case "delete":
-		fmt.Println("Starting delete operation...")
-		// TODO: Implement delete
-	case "migrate":
-		fmt.Println("Starting migration...")
-		// TODO: Implement migration
+		cmd := commands.NewRestoreCommand(db, dbPath, backupPath, backupFile)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Restore failed: %v", err)
+		}
+	case "plan":
+		cmd := commands.NewPlanCommand(db, client, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Plan failed: %v", err)
+		}
+	case "print-plan":
+		cmd := commands.NewPlanCommand(db, client, orgID)
+		if err := cmd.PrintPlan(); err != nil {
+			log.Fatalf("Print plan failed: %v", err)
+		}
+	case "execute":
+		cmd := commands.NewExecuteCommand(db, client, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Execute failed: %v", err)
+		}
+	case "retest":
+		cmd := commands.NewRetestCommand(db, client, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Retest failed: %v", err)
+		}
+	case "cleanup":
+		cmd := commands.NewCleanupCommand(db, client, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Cleanup failed: %v", err)
+		}
 	case "status":
-		fmt.Println("Checking status...")
-		// TODO: Implement status check
+		cmd := commands.NewStatusCommand(db, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Status check failed: %v", err)
+		}
 	case "rollback":
-		fmt.Println("Starting rollback...")
-		// TODO: Implement rollback
+		cmd := commands.NewRollbackCommand(db, client, orgID)
+		if err := cmd.Execute(); err != nil {
+			log.Fatalf("Rollback failed: %v", err)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -102,13 +141,16 @@ func printUsage() {
 	fmt.Println(`Usage: cci-migrator [command] [options]
 
 Commands:
-  collect     Collect and store existing ignores
+  gather      Collect and store existing ignores, issues, and projects
   verify      Verify collection completeness
+  print       Display gathered information (ignores, issues, projects)
   backup      Create backup of collection database
   restore     Restore from backup
-  analyze     Get SARIF data and match findings
-  delete      Delete existing ignores (idempotent)
-  migrate     Perform the migration (idempotent)
+  plan        Create migration plan and resolve conflicts
+  print-plan  Display the migration plan
+  execute     Create new policies based on plan
+  retest      Retest projects with changes
+  cleanup     Delete existing ignores
   status      Show migration status
   rollback    Attempt to rollback migration
 
@@ -116,5 +158,9 @@ Global Options:
   --org-id          Snyk Organization ID
   --api-token       Snyk API Token
   --db-path         Path to SQLite database (default: ./cci-migration.db)
-  --backup-path     Path to backup directory (default: ./backups)`)
-} 
+  --backup-path     Path to backup directory (default: ./backups)
+  --project-type    Project type to migrate (default: sast, only sast supported currently)
+  --strategy        Conflict resolution strategy (default: priority-earliest)
+  --override-csv    Path to CSV with manual override mappings
+  --backup-file     Specific backup file to restore (for restore command)`)
+}

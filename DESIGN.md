@@ -18,12 +18,41 @@ CREATE TABLE ignores (
     ignore_type TEXT,              -- Type of ignore (e.g., permanent, temporary)
     created_at TIMESTAMP,          -- When the ignore was created
     expires_at TIMESTAMP,          -- When the ignore expires (if temporary)
-    fingerprint TEXT,              -- Code fingerprint from code details API
-    finding_id TEXT,               -- Finding ID from SARIF (populated later)
+    asset_key TEXT,                -- Asset key from issues API
     original_state TEXT,           -- JSON blob of complete original ignore state
     deleted_at TIMESTAMP,          -- When the ignore was deleted (for tracking only)
     migrated_at TIMESTAMP,         -- When the ignore was migrated (for tracking only)
-    policy_id TEXT                 -- ID of the created policy (for tracking only)
+    policy_id TEXT,                -- ID of the created policy (for tracking only)
+    internal_policy_id TEXT,       -- Internal reference to policy table
+    selected_for_migration BOOLEAN -- Whether this ignore was selected for migration
+);
+
+CREATE TABLE issues (
+    id TEXT PRIMARY KEY,           -- Issue ID
+    org_id TEXT,                   -- Organization ID
+    project_id TEXT,               -- Project ID
+    asset_key TEXT,                -- Asset key for the issue
+    original_state TEXT            -- JSON blob of complete original issue state
+);
+
+CREATE TABLE projects (
+    id TEXT PRIMARY KEY,           -- Project ID
+    org_id TEXT,                   -- Organization ID
+    name TEXT,                     -- Project name
+    target_information TEXT,       -- JSON blob with target information
+    retested_at TIMESTAMP          -- When the project was retested
+);
+
+CREATE TABLE policies (
+    internal_id TEXT PRIMARY KEY,  -- Internal policy ID
+    org_id TEXT,                   -- Organization ID
+    asset_key TEXT,                -- Asset key this policy applies to
+    policy_type TEXT,              -- Type of policy
+    reason TEXT,                   -- Policy reason
+    expires_at TIMESTAMP,          -- When the policy expires (if temporary)
+    source_ignores TEXT,           -- IDs of ignores this policy replaces
+    external_id TEXT,              -- ID returned by Snyk API after creation
+    created_at TIMESTAMP           -- When the policy was created
 );
 
 CREATE TABLE collection_metadata (
@@ -36,58 +65,60 @@ CREATE TABLE collection_metadata (
 
 ## Migration Process
 
-### Phase 1: Data Collection (Source of Truth)
-1. **Collect V1 SAST Ignores**
-   - Call Snyk V1 API to get all SAST ignores (filtering for SAST projects only)
-   - Store complete ignore state in database
-   - For each SAST ignore:
-     - Store full API response in `original_state`
+### Phase 1: Gather Phase (Source of Truth)
+1. **Collect Data**
+   - Iterate through all ignores of type SAST
+     - Store complete ignore state in database
      - Extract and store normalized fields
-     - Fetch code details using Code Details API
-     - Extract fingerprint
-     - Update database record with fingerprint
+   - Iterate through all issues of type SAST
+     - Store issue data with asset key information
+   - Iterate through all projects of type SAST
+     - Pull down target information
+     - Store project data
+   - For each ignore, add asset key information using the issues table
    - Record collection metadata (timestamp, versions)
    - Create database backup point after collection
 
 2. **Verification**
+   - Print gathered data for review (especially ignores table)
    - Verify all required data is present
    - Validate data integrity
    - Generate collection report
    - Create database checkpoint
 
-### Phase 2: SARIF Analysis (Repeatable)
-1. **Get SARIF Data**
-   - Read ignores from database
-   - Locate target using Snyk APIs
-   - Call Test API to get SARIF for each target
-   - Parse SARIF output
-   - Match fingerprints to finding IDs
-   - Update database with finding IDs
-   - Note: This phase can be repeated any time with original collection data
+### Phase 2: Plan Phase (Repeatable)
+1. **Resolve Ignore Conflicts**
+   - For each asset key with multiple ignores, apply resolution strategy:
+     - Default strategy: prioritize ignores in order: wont-fix, not-vulnerable, temporary
+     - In case of a tie, choose the earliest ignore
+     - Mark selected ignores for migration
+   - Create policy entries for each selected ignore
+     - Maintain details of source ignores in the policy description
+     - Create entry in policy table with internal ID
+     - Link internal policy ID to ignore record
+   - Support optional manual override via CSV with asset key mappings
 
-### Phase 3: Delete Operation (Verifiable)
+### Phase 3: Execute Phase (Idempotent)
+1. **Create Policies**
+   - Iterate through each policy in the policy table
+     - Issue new ignore policy using Policy API
+     - Track external policy ID returned by API
+     - Mark policy as created in database
+   - Note: Can be safely re-run from plan state
+
+### Phase 4: Retest Phase
+1. **Retest Projects**
+   - For each project with changes:
+     - Call V1 import API using stored target information
+     - Mark project as retested in database
+   - Track retest status for each project
+
+### Phase 5: Clean Up Phase (Verifiable)
 1. **Delete Old Ignores (Idempotent)**
-   - Read original ignore states from database
-   - For each ignore:
-     - Verify current state against original state
-     - Delete only if still matching original state
-     - Log discrepancies for review
-   - Track deletion attempts in `deleted_at` (for monitoring only)
-   - Note: Can be safely re-run from collection state
-
-### Phase 4: CCI Migration (Verifiable)
-1. **Wait for CCI Enable**
-   - Program pauses for admin to enable CCI feature flag
-   - Provide clear instructions for admin
-   - Verify CCI feature flag status before proceeding
-
-2. **Create New Policies (Idempotent)**
-   - Read original ignore states from database
-   - For each ignore:
-     - Create policy using original state data
-     - Verify policy creation
-     - Track in `migrated_at` and `policy_id` (for monitoring only)
-   - Note: Can be safely re-run from collection state
+   - Iterate through migrated ignores
+   - Delete original ignores via API
+   - Mark each ignore as deleted in database
+   - Note: Can be safely re-run
 
 ## Error Handling
 - Implement robust error handling for API failures
@@ -97,22 +128,25 @@ CREATE TABLE collection_metadata (
 
 ## API Integration Points
 1. Snyk V1 Ignores API (existing ignores)
-2. Code Details API (fingerprints)
-3. Test API (SARIF data)
+2. Snyk Issues API (asset keys)
+3. Snyk Projects API (project data and target information)
 4. Policy API (new ignores)
+5. Import API (for retesting)
 
 ## CLI Interface
 ```
 Usage: cci-migrator [command] [options]
 
 Commands:
-  collect     Collect and store existing ignores
+  gather      Collect and store existing ignores, issues, and projects
   verify      Verify collection completeness
+  print       Display gathered information (ignores, issues, projects)
   backup      Create backup of collection database
   restore     Restore from backup
-  analyze     Get SARIF data and match findings
-  delete      Delete existing ignores (idempotent)
-  migrate     Perform the migration (idempotent)
+  plan        Create migration plan and resolve conflicts
+  execute     Create new policies based on plan
+  retest      Retest projects with changes
+  cleanup     Delete existing ignores
   status      Show migration status
   rollback    Attempt to rollback migration
 
@@ -122,35 +156,44 @@ Global Options:
   --db-path         Path to SQLite database (default: ./cci-migration.db)
   --backup-path     Path to backup directory (default: ./backups)
   --project-type    Project type to migrate (default: sast, only sast supported currently)
+  --strategy        Conflict resolution strategy (default: priority-earliest)
+  --override-csv    Path to CSV with manual override mappings
 ```
 
 ## Implementation Phases
 
-### Phase 1: Setup and Data Collection
-- [ ] Set up project structure
-- [ ] Implement database schema
-- [ ] Create V1 API client
-- [ ] Implement ignore collection
-- [ ] Add fingerprint collection
+### Phase 1: Setup and Data Gathering
+- [x] Set up project structure
+- [x] Implement database schema
+- [x] Create API clients (Ignores, Issues, Projects)
+- [x] Implement ignore collection
+- [x] Implement issue collection with asset keys
+- [x] Implement project and target collection
+- [x] Add data verification and print capabilities
 
-### Phase 2: SARIF Processing
-- [ ] Implement Test API integration
-- [ ] Add SARIF parsing
-- [ ] Create fingerprint matching logic
-- [ ] Update database with findings
+### Phase 2: Plan Generation
+- [x] Implement conflict resolution logic
+- [x] Create policy planning logic
+- [x] Add support for manual overrides
+- [x] Implement plan verification
 
-### Phase 3: Delete Operation
-- [ ] Implement idempotent V1 ignore deletion
-- [ ] Add deletion status tracking
-- [ ] Implement deletion resumption logic
-- [ ] Add deletion verification
+### Phase 3: Policy Execution
+- [x] Create Policy API client
+- [x] Implement idempotent policy creation
+- [x] Add policy creation tracking
+- [x] Implement execution resumption logic
+- [x] Add policy creation verification
 
-### Phase 4: Migration Logic
-- [ ] Create Policy API client
-- [ ] Implement idempotent policy creation
-- [ ] Add migration status tracking
-- [ ] Implement migration resumption logic
-- [ ] Add policy creation verification
+### Phase 4: Retest Implementation
+- [x] Implement project retest logic using import API
+- [x] Add retest status tracking
+- [x] Handle retest failures
+
+### Phase 5: Cleanup Logic
+- [x] Implement idempotent V1 ignore deletion
+- [x] Add deletion status tracking
+- [x] Implement deletion resumption logic
+- [x] Add deletion verification
 
 ## Security Considerations
 - Secure storage of API tokens
