@@ -17,14 +17,16 @@ type PlanCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
 	orgID  string
+	debug  bool
 }
 
 // NewPlanCommand creates a new plan command
-func NewPlanCommand(db DatabaseInterface, client ClientInterface, orgID string) *PlanCommand {
+func NewPlanCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *PlanCommand {
 	return &PlanCommand{
 		db:     db,
 		client: client,
 		orgID:  orgID,
+		debug:  debug,
 	}
 }
 
@@ -208,11 +210,12 @@ func (c *PlanCommand) createPolicy(selectedIgnore *database.Ignore, allIgnores [
 			}
 		}
 
-		detail := fmt.Sprintf("Ignore %s: type=%s, created=%s%s",
+		detail := fmt.Sprintf("Ignore %s: type=%s, created=%s%s, reason=%s",
 			ignore.ID,
 			ignore.IgnoreType,
 			ignore.CreatedAt.Format("2006-01-02"),
-			selectedMarker)
+			selectedMarker,
+			ignore.Reason)
 
 		ignoreDetails = append(ignoreDetails, detail)
 	}

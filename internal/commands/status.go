@@ -11,13 +11,15 @@ import (
 type StatusCommand struct {
 	db    DatabaseInterface
 	orgID string
+	debug bool
 }
 
 // NewStatusCommand creates a new status command
-func NewStatusCommand(db DatabaseInterface, orgID string) *StatusCommand {
+func NewStatusCommand(db DatabaseInterface, orgID string, debug bool) *StatusCommand {
 	return &StatusCommand{
 		db:    db,
 		orgID: orgID,
+		debug: debug,
 	}
 }
 
@@ -156,14 +158,16 @@ type RollbackCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
 	orgID  string
+	debug  bool
 }
 
 // NewRollbackCommand creates a new rollback command
-func NewRollbackCommand(db DatabaseInterface, client ClientInterface, orgID string) *RollbackCommand {
+func NewRollbackCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *RollbackCommand {
 	return &RollbackCommand{
 		db:     db,
 		client: client,
 		orgID:  orgID,
+		debug:  debug,
 	}
 }
 

@@ -14,14 +14,16 @@ type RetestCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
 	orgID  string
+	debug  bool
 }
 
 // NewRetestCommand creates a new retest command
-func NewRetestCommand(db DatabaseInterface, client ClientInterface, orgID string) *RetestCommand {
+func NewRetestCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *RetestCommand {
 	return &RetestCommand{
 		db:     db,
 		client: client,
 		orgID:  orgID,
+		debug:  debug,
 	}
 }
 

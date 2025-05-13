@@ -82,56 +82,59 @@ type Issue struct {
 
 // SASTIssue represents a SAST issue from the Issues API
 type SASTIssue struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Classes []struct {
-		ID     string `json:"id"`
-		Source string `json:"source"`
-		Type   string `json:"type"`
-	} `json:"classes"`
-	Coordinates []struct {
-		IsFixableManually bool `json:"is_fixable_manually"`
-		IsFixableSnyk     bool `json:"is_fixable_snyk"`
-		IsFixableUpstream bool `json:"is_fixable_upstream"`
-		Representations   []struct {
-			SourceLocation struct {
-				CommitID string `json:"commit_id"`
-				File     string `json:"file"`
-				Region   struct {
-					End struct {
-						Column int `json:"column"`
-						Line   int `json:"line"`
-					} `json:"end"`
-					Start struct {
-						Column int `json:"column"`
-						Line   int `json:"line"`
-					} `json:"start"`
-				} `json:"region"`
-			} `json:"sourceLocation"`
-		} `json:"representations"`
-	} `json:"coordinates"`
-	CreatedAt              time.Time `json:"created_at"`
-	Description            string    `json:"description"`
-	EffectiveSeverityLevel string    `json:"effective_severity_level"`
-	Ignored                bool      `json:"ignored"`
-	Key                    string    `json:"key"`
-	KeyAsset               string    `json:"key_asset"`
-	Problems               []struct {
-		ID        string    `json:"id"`
-		Source    string    `json:"source"`
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Attributes struct {
+		Classes []struct {
+			ID     string `json:"id"`
+			Source string `json:"source"`
+			Type   string `json:"type"`
+		} `json:"classes"`
+		Coordinates []struct {
+			IsFixableManually bool `json:"is_fixable_manually"`
+			IsFixableSnyk     bool `json:"is_fixable_snyk"`
+			IsFixableUpstream bool `json:"is_fixable_upstream"`
+			Representations   []struct {
+				SourceLocation struct {
+					CommitID string `json:"commit_id"`
+					File     string `json:"file"`
+					Region   struct {
+						End struct {
+							Column int `json:"column"`
+							Line   int `json:"line"`
+						} `json:"end"`
+						Start struct {
+							Column int `json:"column"`
+							Line   int `json:"line"`
+						} `json:"start"`
+					} `json:"region"`
+				} `json:"sourceLocation"`
+			} `json:"representations"`
+		} `json:"coordinates"`
+		CreatedAt              time.Time `json:"created_at"`
+		Description            string    `json:"description"`
+		EffectiveSeverityLevel string    `json:"effective_severity_level"`
+		Ignored                bool      `json:"ignored"`
+		Key                    string    `json:"key"`
+		KeyAsset               string    `json:"key_asset"`
+		Problems               []struct {
+			ID        string    `json:"id"`
+			Source    string    `json:"source"`
+			Type      string    `json:"type"`
+			UpdatedAt time.Time `json:"updated_at"`
+		} `json:"problems"`
+		Risk struct {
+			Factors []any `json:"factors"`
+			Score   struct {
+				Model string `json:"model"`
+				Value int    `json:"value"`
+			} `json:"score"`
+		} `json:"risk"`
+		Status    string    `json:"status"`
+		Title     string    `json:"title"`
 		Type      string    `json:"type"`
 		UpdatedAt time.Time `json:"updated_at"`
-	} `json:"problems"`
-	Risk struct {
-		Factors []string `json:"factors"`
-		Score   struct {
-			Model string `json:"model"`
-			Value int    `json:"value"`
-		} `json:"score"`
-	} `json:"risk"`
-	Status        string    `json:"status"`
-	Title         string    `json:"title"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	} `json:"attributes"`
 	Relationships struct {
 		Organization struct {
 			Data struct {
@@ -339,14 +342,9 @@ func (c *Client) GetSASTIssues(orgID string, projectID string) ([]SASTIssue, err
 
 // getAllSASTIssues handles paginated requests for SAST issues
 func (c *Client) getAllSASTIssues(initialURL string) ([]SASTIssue, error) {
-	type IssueData struct {
-		ID         string    `json:"id"`
-		Type       string    `json:"type"`
-		Attributes SASTIssue `json:"attributes"`
-	}
 
 	type Response struct {
-		Data  []IssueData `json:"data"`
+		Data  []SASTIssue `json:"data"`
 		Links struct {
 			Next string `json:"next,omitempty"`
 		} `json:"links,omitempty"`
@@ -417,11 +415,7 @@ func (c *Client) getAllSASTIssues(initialURL string) ([]SASTIssue, error) {
 		resp.Body.Close()
 
 		// Process issues
-		for _, item := range response.Data {
-			issue := item.Attributes
-			issue.ID = item.ID // Ensure ID is set from the data object
-			allIssues = append(allIssues, issue)
-		}
+		allIssues = append(allIssues, response.Data...)
 
 		// Check for next page and handle relative URLs
 		if response.Links.Next != "" {

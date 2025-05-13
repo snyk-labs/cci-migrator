@@ -80,54 +80,19 @@ var _ = Describe("Gather Command", func() {
 				Expect(projectID).To(Equal(""))
 				return []snyk.SASTIssue{
 					{
-						ID:                     "test-ignore-id",
-						Type:                   "issue",
-						KeyAsset:               "test-asset-key",
-						Ignored:                true,
-						CreatedAt:              time.Now(),
-						Description:            "Test Issue",
-						EffectiveSeverityLevel: "medium",
-						Key:                    "test-key",
-						Status:                 "open",
-						Title:                  "Test Issue Title",
-						UpdatedAt:              time.Now(),
-						Classes: []struct {
-							ID     string `json:"id"`
-							Source string `json:"source"`
-							Type   string `json:"type"`
-						}{
-							{
-								ID:     "CWE-123",
-								Source: "CWE",
-								Type:   "weakness",
-							},
-						},
-						Coordinates: []struct {
-							IsFixableManually bool `json:"is_fixable_manually"`
-							IsFixableSnyk     bool `json:"is_fixable_snyk"`
-							IsFixableUpstream bool `json:"is_fixable_upstream"`
-							Representations   []struct {
-								SourceLocation struct {
-									CommitID string `json:"commit_id"`
-									File     string `json:"file"`
-									Region   struct {
-										End struct {
-											Column int `json:"column"`
-											Line   int `json:"line"`
-										} `json:"end"`
-										Start struct {
-											Column int `json:"column"`
-											Line   int `json:"line"`
-										} `json:"start"`
-									} `json:"region"`
-								} `json:"sourceLocation"`
-							} `json:"representations"`
-						}{
-							{
-								IsFixableManually: false,
-								IsFixableSnyk:     false,
-								IsFixableUpstream: false,
-								Representations: []struct {
+						ID:   "test-ignore-id",
+						Type: "issue",
+						Attributes: struct {
+							Classes []struct {
+								ID     string `json:"id"`
+								Source string `json:"source"`
+								Type   string `json:"type"`
+							} `json:"classes"`
+							Coordinates []struct {
+								IsFixableManually bool `json:"is_fixable_manually"`
+								IsFixableSnyk     bool `json:"is_fixable_snyk"`
+								IsFixableUpstream bool `json:"is_fixable_upstream"`
+								Representations   []struct {
 									SourceLocation struct {
 										CommitID string `json:"commit_id"`
 										File     string `json:"file"`
@@ -142,9 +107,79 @@ var _ = Describe("Gather Command", func() {
 											} `json:"start"`
 										} `json:"region"`
 									} `json:"sourceLocation"`
-								}{
-									{
-										SourceLocation: struct {
+								} `json:"representations"`
+							} `json:"coordinates"`
+							CreatedAt              time.Time `json:"created_at"`
+							Description            string    `json:"description"`
+							EffectiveSeverityLevel string    `json:"effective_severity_level"`
+							Ignored                bool      `json:"ignored"`
+							Key                    string    `json:"key"`
+							KeyAsset               string    `json:"key_asset"`
+							Problems               []struct {
+								ID        string    `json:"id"`
+								Source    string    `json:"source"`
+								Type      string    `json:"type"`
+								UpdatedAt time.Time `json:"updated_at"`
+							} `json:"problems"`
+							Risk struct {
+								Factors []any `json:"factors"`
+								Score   struct {
+									Model string `json:"model"`
+									Value int    `json:"value"`
+								} `json:"score"`
+							} `json:"risk"`
+							Status    string    `json:"status"`
+							Title     string    `json:"title"`
+							Type      string    `json:"type"`
+							UpdatedAt time.Time `json:"updated_at"`
+						}{
+							KeyAsset:               "test-asset-key",
+							Ignored:                true,
+							CreatedAt:              time.Now(),
+							Description:            "Test Issue",
+							EffectiveSeverityLevel: "medium",
+							Key:                    "test-key",
+							Status:                 "open",
+							Title:                  "Test Issue Title",
+							UpdatedAt:              time.Now(),
+							Classes: []struct {
+								ID     string `json:"id"`
+								Source string `json:"source"`
+								Type   string `json:"type"`
+							}{
+								{
+									ID:     "CWE-123",
+									Source: "CWE",
+									Type:   "weakness",
+								},
+							},
+							Coordinates: []struct {
+								IsFixableManually bool `json:"is_fixable_manually"`
+								IsFixableSnyk     bool `json:"is_fixable_snyk"`
+								IsFixableUpstream bool `json:"is_fixable_upstream"`
+								Representations   []struct {
+									SourceLocation struct {
+										CommitID string `json:"commit_id"`
+										File     string `json:"file"`
+										Region   struct {
+											End struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"end"`
+											Start struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"start"`
+										} `json:"region"`
+									} `json:"sourceLocation"`
+								} `json:"representations"`
+							}{
+								{
+									IsFixableManually: false,
+									IsFixableSnyk:     false,
+									IsFixableUpstream: false,
+									Representations: []struct {
+										SourceLocation struct {
 											CommitID string `json:"commit_id"`
 											File     string `json:"file"`
 											Region   struct {
@@ -157,66 +192,83 @@ var _ = Describe("Gather Command", func() {
 													Line   int `json:"line"`
 												} `json:"start"`
 											} `json:"region"`
-										}{
-											CommitID: "test-commit",
-											File:     "test.go",
-											Region: struct {
-												End struct {
-													Column int `json:"column"`
-													Line   int `json:"line"`
-												} `json:"end"`
-												Start struct {
-													Column int `json:"column"`
-													Line   int `json:"line"`
-												} `json:"start"`
+										} `json:"sourceLocation"`
+									}{
+										{
+											SourceLocation: struct {
+												CommitID string `json:"commit_id"`
+												File     string `json:"file"`
+												Region   struct {
+													End struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"end"`
+													Start struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"start"`
+												} `json:"region"`
 											}{
-												End: struct {
-													Column int `json:"column"`
-													Line   int `json:"line"`
+												CommitID: "test-commit",
+												File:     "test.go",
+												Region: struct {
+													End struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"end"`
+													Start struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"start"`
 												}{
-													Column: 20,
-													Line:   100,
-												},
-												Start: struct {
-													Column int `json:"column"`
-													Line   int `json:"line"`
-												}{
-													Column: 1,
-													Line:   100,
+													End: struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													}{
+														Column: 20,
+														Line:   100,
+													},
+													Start: struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													}{
+														Column: 1,
+														Line:   100,
+													},
 												},
 											},
 										},
 									},
 								},
 							},
-						},
-						Problems: []struct {
-							ID        string    `json:"id"`
-							Source    string    `json:"source"`
-							Type      string    `json:"type"`
-							UpdatedAt time.Time `json:"updated_at"`
-						}{
-							{
-								ID:        "test-problem-id",
-								Source:    "SNYK",
-								Type:      "vulnerability",
-								UpdatedAt: time.Now(),
-							},
-						},
-						Risk: struct {
-							Factors []string `json:"factors"`
-							Score   struct {
-								Model string `json:"model"`
-								Value int    `json:"value"`
-							} `json:"score"`
-						}{
-							Factors: []string{},
-							Score: struct {
-								Model string `json:"model"`
-								Value int    `json:"value"`
+							Problems: []struct {
+								ID        string    `json:"id"`
+								Source    string    `json:"source"`
+								Type      string    `json:"type"`
+								UpdatedAt time.Time `json:"updated_at"`
 							}{
-								Model: "v1",
-								Value: 363,
+								{
+									ID:        "test-problem-id",
+									Source:    "SNYK",
+									Type:      "vulnerability",
+									UpdatedAt: time.Now(),
+								},
+							},
+							Risk: struct {
+								Factors []any `json:"factors"`
+								Score   struct {
+									Model string `json:"model"`
+									Value int    `json:"value"`
+								} `json:"score"`
+							}{
+								Factors: []any{},
+								Score: struct {
+									Model string `json:"model"`
+									Value int    `json:"value"`
+								}{
+									Model: "v1",
+									Value: 363,
+								},
 							},
 						},
 						Relationships: struct {

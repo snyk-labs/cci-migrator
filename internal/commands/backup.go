@@ -14,14 +14,16 @@ type BackupCommand struct {
 	db         DatabaseInterface
 	dbPath     string
 	backupPath string
+	debug      bool
 }
 
 // NewBackupCommand creates a new backup command
-func NewBackupCommand(db DatabaseInterface, dbPath, backupPath string) *BackupCommand {
+func NewBackupCommand(db DatabaseInterface, dbPath, backupPath string, debug bool) *BackupCommand {
 	return &BackupCommand{
 		db:         db,
 		dbPath:     dbPath,
 		backupPath: backupPath,
+		debug:      debug,
 	}
 }
 
@@ -71,15 +73,17 @@ type RestoreCommand struct {
 	dbPath     string
 	backupPath string
 	backupFile string
+	debug      bool
 }
 
 // NewRestoreCommand creates a new restore command
-func NewRestoreCommand(db DatabaseInterface, dbPath, backupPath, backupFile string) *RestoreCommand {
+func NewRestoreCommand(db DatabaseInterface, dbPath, backupPath, backupFile string, debug bool) *RestoreCommand {
 	return &RestoreCommand{
 		db:         db,
 		dbPath:     dbPath,
 		backupPath: backupPath,
 		backupFile: backupFile,
+		debug:      debug,
 	}
 }
 

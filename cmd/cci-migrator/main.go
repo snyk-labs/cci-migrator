@@ -73,62 +73,62 @@ func main() {
 	// Execute the appropriate command
 	switch command {
 	case "gather":
-		cmd := commands.NewGatherCommand(db, client, orgID)
+		cmd := commands.NewGatherCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Gather failed: %v", err)
 		}
 	case "verify":
-		cmd := commands.NewVerifyCommand(db, client, orgID)
+		cmd := commands.NewVerifyCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Verification failed: %v", err)
 		}
 	case "print":
-		cmd := commands.NewGatherCommand(db, client, orgID)
+		cmd := commands.NewGatherCommand(db, client, orgID, debug)
 		if err := cmd.Print(); err != nil {
 			log.Fatalf("Print failed: %v", err)
 		}
 	case "backup":
-		cmd := commands.NewBackupCommand(db, dbPath, backupPath)
+		cmd := commands.NewBackupCommand(db, dbPath, backupPath, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Backup failed: %v", err)
 		}
 	case "restore":
-		cmd := commands.NewRestoreCommand(db, dbPath, backupPath, backupFile)
+		cmd := commands.NewRestoreCommand(db, dbPath, backupPath, backupFile, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Restore failed: %v", err)
 		}
 	case "plan":
-		cmd := commands.NewPlanCommand(db, client, orgID)
+		cmd := commands.NewPlanCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Plan failed: %v", err)
 		}
 	case "print-plan":
-		cmd := commands.NewPlanCommand(db, client, orgID)
+		cmd := commands.NewPlanCommand(db, client, orgID, debug)
 		if err := cmd.PrintPlan(); err != nil {
 			log.Fatalf("Print plan failed: %v", err)
 		}
 	case "execute":
-		cmd := commands.NewExecuteCommand(db, client, orgID)
+		cmd := commands.NewExecuteCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Execute failed: %v", err)
 		}
 	case "retest":
-		cmd := commands.NewRetestCommand(db, client, orgID)
+		cmd := commands.NewRetestCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Retest failed: %v", err)
 		}
 	case "cleanup":
-		cmd := commands.NewCleanupCommand(db, client, orgID)
+		cmd := commands.NewCleanupCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Cleanup failed: %v", err)
 		}
 	case "status":
-		cmd := commands.NewStatusCommand(db, orgID)
+		cmd := commands.NewStatusCommand(db, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Status check failed: %v", err)
 		}
 	case "rollback":
-		cmd := commands.NewRollbackCommand(db, client, orgID)
+		cmd := commands.NewRollbackCommand(db, client, orgID, debug)
 		if err := cmd.Execute(); err != nil {
 			log.Fatalf("Rollback failed: %v", err)
 		}

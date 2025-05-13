@@ -49,14 +49,23 @@ type GatherCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
 	orgID  string
+	debug  bool
 }
 
 // NewGatherCommand creates a new gather command
-func NewGatherCommand(db DatabaseInterface, client ClientInterface, orgID string) *GatherCommand {
+func NewGatherCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *GatherCommand {
 	return &GatherCommand{
 		db:     db,
 		client: client,
 		orgID:  orgID,
+		debug:  debug,
+	}
+}
+
+// debugLog logs a message only when debug mode is enabled
+func (c *GatherCommand) debugLog(format string, args ...interface{}) {
+	if c.debug {
+		log.Printf("Debug: "+format, args...)
 	}
 }
 
@@ -168,7 +177,7 @@ func (c *GatherCommand) Execute() error {
 
 	// Process issues and update ignores
 	for i, issue := range issues {
-		log.Printf("Processing issue %d/%d: ID=%s, AssetKey=%s, ProjectKey=%s", i+1, len(issues), issue.ID, issue.KeyAsset, issue.Key)
+		log.Printf("Processing issue %d/%d: ID=%s, AssetKey=%s, ProjectKey=%s", i+1, len(issues), issue.ID, issue.Attributes.KeyAsset, issue.Attributes.Key)
 
 		originalState, err := json.Marshal(issue)
 		if err != nil {
@@ -181,12 +190,12 @@ func (c *GatherCommand) Execute() error {
 			ID:            issue.ID,
 			OrgID:         c.orgID,
 			ProjectID:     issue.Relationships.ScanItem.Data.ID,
-			AssetKey:      issue.KeyAsset,
-			ProjectKey:    issue.Key,
+			AssetKey:      issue.Attributes.KeyAsset,
+			ProjectKey:    issue.Attributes.Key,
 			OriginalState: string(originalState),
 		}
 
-		log.Printf("DEBUG: Preparing to insert issue: ID=%s OrgID=%s ProjectID=%s AssetKey=%s ProjectKey=%s",
+		c.debugLog("Preparing to insert issue: ID=%s OrgID=%s ProjectID=%s AssetKey=%s ProjectKey=%s",
 			dbIssue.ID, dbIssue.OrgID, dbIssue.ProjectID, dbIssue.AssetKey, dbIssue.ProjectKey)
 
 		if err := c.db.InsertIssue(dbIssue); err != nil {
@@ -194,7 +203,7 @@ func (c *GatherCommand) Execute() error {
 			continue
 		}
 
-		log.Printf("Successfully inserted issue %s with asset key %s and project key %s into database", issue.ID, issue.KeyAsset, issue.Key)
+		log.Printf("Successfully inserted issue %s with asset key %s and project key %s into database", issue.ID, issue.Attributes.KeyAsset, issue.Attributes.Key)
 	}
 
 	// Phase 3.1: Update asset keys for all ignores from issues

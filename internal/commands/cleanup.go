@@ -11,14 +11,16 @@ type CleanupCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
 	orgID  string
+	debug  bool
 }
 
 // NewCleanupCommand creates a new cleanup command
-func NewCleanupCommand(db DatabaseInterface, client ClientInterface, orgID string) *CleanupCommand {
+func NewCleanupCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *CleanupCommand {
 	return &CleanupCommand{
 		db:     db,
 		client: client,
 		orgID:  orgID,
+		debug:  debug,
 	}
 }
 

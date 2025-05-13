@@ -10,14 +10,16 @@ type VerifyCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
 	orgID  string
+	debug  bool
 }
 
 // NewVerifyCommand creates a new verify command
-func NewVerifyCommand(db DatabaseInterface, client ClientInterface, orgID string) *VerifyCommand {
+func NewVerifyCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *VerifyCommand {
 	return &VerifyCommand{
 		db:     db,
 		client: client,
 		orgID:  orgID,
+		debug:  debug,
 	}
 }
 
