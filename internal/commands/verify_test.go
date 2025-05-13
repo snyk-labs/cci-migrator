@@ -3,7 +3,6 @@ package commands_test
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/z4ce/cci-migrator/internal/commands"
@@ -69,8 +68,8 @@ func TestVerifyCommandExecute(t *testing.T) {
 			mockClient := NewMockClient()
 
 			// Set up default implementations for required interface methods
-			mockClient.CreatePolicyFunc = func(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error) {
-				return "policy-id", nil
+			mockClient.CreatePolicyFunc = func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error) {
+				return &snyk.Policy{ID: "policy-id"}, nil
 			}
 
 			mockClient.RetestProjectFunc = func(orgID, projectID string, target *snyk.Target) error {

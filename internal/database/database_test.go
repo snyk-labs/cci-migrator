@@ -54,6 +54,32 @@ var _ = Describe("Database", func() {
 		Expect(ignore.IssueID).To(Equal(testIgnore.IssueID))
 	})
 
+	It("should insert and retrieve issues correctly", func() {
+		// Test inserting and retrieving an issue
+		testIssue := &Issue{
+			ID:            "test-issue-id",
+			OrgID:         "test-org",
+			ProjectID:     "test-project",
+			AssetKey:      "test-asset-key",
+			ProjectKey:    "test-project-key",
+			OriginalState: "{}",
+		}
+
+		// Test InsertIssue
+		err := db.InsertIssue(testIssue)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Test GetIssuesByOrgID
+		issues, err := db.GetIssuesByOrgID(testIssue.OrgID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(issues).To(HaveLen(1))
+
+		issue := issues[0]
+		Expect(issue.ID).To(Equal(testIssue.ID))
+		Expect(issue.AssetKey).To(Equal(testIssue.AssetKey))
+		Expect(issue.ProjectKey).To(Equal(testIssue.ProjectKey))
+	})
+
 	It("should update and retrieve collection metadata correctly", func() {
 		// Test UpdateCollectionMetadata
 		now := time.Now()

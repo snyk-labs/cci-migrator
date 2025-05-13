@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/z4ce/cci-migrator/internal/database"
+	"github.com/z4ce/cci-migrator/internal/snyk"
 )
 
 // ExecuteCommand handles the execution phase of the migration
@@ -65,19 +66,42 @@ func (c *ExecuteCommand) Execute() error {
 		totalPolicies++
 		log.Printf("Creating policy %d for asset key %s", totalPolicies, policy.AssetKey)
 
+		// Create policy attributes
+		policyAttributes := snyk.CreatePolicyAttributes{
+			Name:       fmt.Sprintf("Migrated policy for %s", policy.AssetKey),
+			ActionType: "ignore",
+			Action: snyk.Action{
+				Data: snyk.ActionData{
+					IgnoreType: policy.PolicyType,
+					Reason:     policy.Reason,
+					Expires:    policy.ExpiresAt,
+				},
+			},
+			ConditionsGroup: snyk.ConditionsGroup{
+				LogicalOperator: "and",
+				Conditions: []snyk.Condition{
+					{
+						Field:    "assetKey",
+						Operator: "equals",
+						Value:    policy.AssetKey,
+					},
+				},
+			},
+		}
+
 		// Create the policy using the Policy API
-		externalID, err := c.client.CreatePolicy(
+		createdPolicy, err := c.client.CreatePolicy(
 			c.orgID,
-			policy.AssetKey,
-			policy.PolicyType,
-			policy.Reason,
-			policy.ExpiresAt,
+			policyAttributes,
+			nil, // No additional metadata
 		)
 		if err != nil {
 			log.Printf("Warning: failed to create policy for asset key %s: %v", policy.AssetKey, err)
 			failedPolicies++
 			continue
 		}
+
+		externalID := createdPolicy.ID
 
 		// Update policy with external ID and creation time
 		now := time.Now()

@@ -24,6 +24,7 @@ func main() {
 		strategy    string
 		overrideCsv string
 		backupFile  string
+		debug       bool
 	)
 
 	// Set up global flags
@@ -35,6 +36,7 @@ func main() {
 	globalFlags.StringVar(&strategy, "strategy", "priority-earliest", "Conflict resolution strategy")
 	globalFlags.StringVar(&overrideCsv, "override-csv", "", "Path to CSV with manual override mappings")
 	globalFlags.StringVar(&backupFile, "backup-file", "", "Specific backup file to restore (for restore command)")
+	globalFlags.BoolVar(&debug, "debug", false, "Enable debug output of HTTP requests and responses")
 
 	// Check if we have any arguments
 	if len(os.Args) < 2 {
@@ -66,7 +68,7 @@ func main() {
 	defer db.Close()
 
 	// Initialize Snyk client
-	client := snyk.New(apiToken)
+	client := snyk.New(apiToken, debug)
 
 	// Execute the appropriate command
 	switch command {
@@ -162,5 +164,6 @@ Global Options:
   --project-type    Project type to migrate (default: sast, only sast supported currently)
   --strategy        Conflict resolution strategy (default: priority-earliest)
   --override-csv    Path to CSV with manual override mappings
-  --backup-file     Specific backup file to restore (for restore command)`)
+  --backup-file     Specific backup file to restore (for restore command)
+  --debug           Enable debug output of HTTP requests and responses`)
 }

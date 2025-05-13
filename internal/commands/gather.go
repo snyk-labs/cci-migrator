@@ -39,7 +39,7 @@ type ClientInterface interface {
 	GetIgnores(orgID, projectID string) ([]snyk.Ignore, error)
 	GetProjectTarget(orgID, projectID string) (*snyk.Target, error)
 	GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, error)
-	CreatePolicy(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error)
+	CreatePolicy(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
 	RetestProject(orgID, projectID string, target *snyk.Target) error
 	DeleteIgnore(orgID, projectID, ignoreID string) error
 }
@@ -123,13 +123,7 @@ func (c *GatherCommand) Execute() error {
 		}
 
 		for i, ignore := range ignores {
-			log.Printf("Processing ignore %d/%d: ID=%s, IssueID=%s", i+1, len(ignores), ignore.ID, ignore.IssueID)
-
-			// Skip non-SAST ignores
-			if ignore.Issue.Type != "code" {
-				log.Printf("Ignore %s is not a SAST ignore (type: %s), skipping", ignore.ID, ignore.Issue.Type)
-				continue
-			}
+			log.Printf("Processing ignore %d/%d: ID=%s", i+1, len(ignores), ignore.ID)
 
 			// Convert Snyk ignore to database ignore
 			originalState, err := json.Marshal(ignore)
@@ -140,7 +134,7 @@ func (c *GatherCommand) Execute() error {
 
 			dbIgnore := &database.Ignore{
 				ID:            ignore.ID,
-				IssueID:       ignore.IssueID,
+				IssueID:       ignore.ID, // The ignore ID is the same as the issue ID
 				OrgID:         c.orgID,
 				ProjectID:     project.ID,
 				Reason:        ignore.Reason,
@@ -162,58 +156,87 @@ func (c *GatherCommand) Execute() error {
 
 	// Phase 3: Gather all SAST issues and match with ignores
 	log.Printf("Phase 3: Gathering SAST issues and asset keys...")
-	for _, project := range projects {
-		log.Printf("Processing issues for project: %s (%s)", project.Name, project.ID)
 
-		issues, err := c.client.GetSASTIssues(c.orgID, project.ID)
+	// Get all SAST issues for the organization at once
+	issues, err := c.client.GetSASTIssues(c.orgID, "")
+	if err != nil {
+		log.Printf("Warning: failed to get SAST issues: %v", err)
+		return fmt.Errorf("failed to get SAST issues: %w", err)
+	}
+
+	log.Printf("Fetched %d SAST issues for organization", len(issues))
+
+	// Process issues and update ignores
+	for i, issue := range issues {
+		log.Printf("Processing issue %d/%d: ID=%s, AssetKey=%s, ProjectKey=%s", i+1, len(issues), issue.ID, issue.KeyAsset, issue.Key)
+
+		originalState, err := json.Marshal(issue)
 		if err != nil {
-			log.Printf("Warning: failed to get issues for project %s: %v", project.ID, err)
+			log.Printf("Warning: failed to marshal original state for issue %s: %v", issue.ID, err)
 			continue
 		}
 
-		log.Printf("Fetched %d issues for project %s", len(issues), project.ID)
+		// Store issue in database
+		dbIssue := &database.Issue{
+			ID:            issue.ID,
+			OrgID:         c.orgID,
+			ProjectID:     issue.Relationships.ScanItem.Data.ID,
+			AssetKey:      issue.KeyAsset,
+			ProjectKey:    issue.Key,
+			OriginalState: string(originalState),
+		}
 
-		for i, issue := range issues {
-			log.Printf("Processing issue %d/%d: ID=%s, AssetKey=%s", i+1, len(issues), issue.ID, issue.AssetKey)
+		log.Printf("DEBUG: Preparing to insert issue: ID=%s OrgID=%s ProjectID=%s AssetKey=%s ProjectKey=%s",
+			dbIssue.ID, dbIssue.OrgID, dbIssue.ProjectID, dbIssue.AssetKey, dbIssue.ProjectKey)
 
-			originalState, err := json.Marshal(issue)
-			if err != nil {
-				log.Printf("Warning: failed to marshal original state for issue %s: %v", issue.ID, err)
-				continue
+		if err := c.db.InsertIssue(dbIssue); err != nil {
+			log.Printf("Warning: failed to insert issue %s: %v", issue.ID, err)
+			continue
+		}
+
+		log.Printf("Successfully inserted issue %s with asset key %s and project key %s into database", issue.ID, issue.KeyAsset, issue.Key)
+	}
+
+	// Phase 3.1: Update asset keys for all ignores from issues
+	log.Printf("Phase 3.1: Updating asset keys for all ignores in organization %s...", c.orgID)
+	updateIgnoresQuery := `
+		UPDATE ignores
+		SET asset_key = (
+			SELECT i.asset_key
+			FROM issues i
+			WHERE i.project_key = ignores.issue_id   -- Corrected join condition
+			  AND i.org_id = ignores.org_id
+			  AND i.project_id = ignores.project_id
+			LIMIT 1 -- Ensures subquery returns one row
+		)
+		WHERE ignores.org_id = ?
+		  AND EXISTS (
+			SELECT 1
+			FROM issues i
+			WHERE i.project_key = ignores.issue_id   -- Corrected join condition
+			  AND i.org_id = ignores.org_id
+			  AND i.project_id = ignores.project_id
+			  AND i.asset_key IS NOT NULL
+			  AND i.asset_key != ''
+		);`
+
+	result, err := c.db.Exec(updateIgnoresQuery, c.orgID)
+	if err != nil {
+		log.Printf("Warning: failed to bulk update asset keys for ignores in org %s: %v", c.orgID, err)
+		// Depending on requirements, this could be a fatal error:
+		// return fmt.Errorf("failed to bulk update asset keys for ignores: %w", err)
+	} else {
+		// Check if the result provides RowsAffected (standard sql.Result)
+		if res, ok := result.(interface{ RowsAffected() (int64, error) }); ok {
+			rowsAffected, raErr := res.RowsAffected()
+			if raErr != nil {
+				log.Printf("Warning: could not get rows affected after bulk update for org %s: %v", c.orgID, raErr)
+			} else {
+				log.Printf("Successfully executed bulk update for ignores in org %s. Rows affected: %d", c.orgID, rowsAffected)
 			}
-
-			// Store issue in database
-			dbIssue := &database.Issue{
-				ID:            issue.ID,
-				OrgID:         c.orgID,
-				ProjectID:     project.ID,
-				AssetKey:      issue.AssetKey,
-				OriginalState: string(originalState),
-			}
-
-			if err := c.db.InsertIssue(dbIssue); err != nil {
-				log.Printf("Warning: failed to insert issue %s: %v", issue.ID, err)
-				continue
-			}
-
-			log.Printf("Successfully inserted issue %s with asset key %s into database", issue.ID, issue.AssetKey)
-
-			// Update ignores with asset key if this issue is ignored
-			if issue.IsIgnored {
-				// Execute query to update any ignores that match this issue ID
-				_, err := c.db.Exec(`
-					UPDATE ignores 
-					SET asset_key = ? 
-					WHERE issue_id = ? AND org_id = ? AND project_id = ?
-				`, issue.AssetKey, issue.ID, c.orgID, project.ID)
-
-				if err != nil {
-					log.Printf("Warning: failed to update asset key for issue %s: %v", issue.ID, err)
-					continue
-				}
-
-				log.Printf("Updated asset key for ignores related to issue %s", issue.ID)
-			}
+		} else {
+			// Fallback log if RowsAffected is not available
+			log.Printf("Successfully executed bulk update for ignores in organization %s (RowsAffected not available).", c.orgID)
 		}
 	}
 
@@ -286,16 +309,17 @@ func (c *GatherCommand) Print() error {
 	}
 
 	// Print issues (get from database)
-	rows, err := c.db.Query("SELECT id, org_id, project_id, asset_key FROM issues WHERE org_id = ?", c.orgID)
+	rows, err := c.db.Query("SELECT id, org_id, project_id, asset_key, project_key FROM issues WHERE org_id = ?", c.orgID)
 	if err != nil {
 		return fmt.Errorf("failed to get issues: %w", err)
 	}
 
 	type SimpleIssue struct {
-		ID        string
-		OrgID     string
-		ProjectID string
-		AssetKey  string
+		ID         string
+		OrgID      string
+		ProjectID  string
+		AssetKey   string
+		ProjectKey string
 	}
 
 	var issues []SimpleIssue
@@ -308,7 +332,7 @@ func (c *GatherCommand) Print() error {
 
 		for rowsScanner.Next() {
 			var issue SimpleIssue
-			if err := rowsScanner.Scan(&issue.ID, &issue.OrgID, &issue.ProjectID, &issue.AssetKey); err != nil {
+			if err := rowsScanner.Scan(&issue.ID, &issue.OrgID, &issue.ProjectID, &issue.AssetKey, &issue.ProjectKey); err != nil {
 				log.Printf("Error scanning issue row: %v", err)
 				continue
 			}
@@ -319,8 +343,8 @@ func (c *GatherCommand) Print() error {
 	log.Printf("Found %d issues:", len(issues))
 	for i, issue := range issues {
 		if i < 10 || len(issues) < 20 { // Print first 10 or all if less than 20
-			log.Printf("  Issue %d/%d: ID=%s, AssetKey=%s",
-				i+1, len(issues), issue.ID, issue.AssetKey)
+			log.Printf("  Issue %d/%d: ID=%s, AssetKey=%s, ProjectKey=%s",
+				i+1, len(issues), issue.ID, issue.AssetKey, issue.ProjectKey)
 		} else if i == 10 {
 			log.Printf("  ... and %d more issues", len(issues)-10)
 			break

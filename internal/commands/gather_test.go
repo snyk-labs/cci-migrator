@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -55,27 +56,234 @@ var _ = Describe("Gather Command", func() {
 				return []snyk.Ignore{
 					{
 						ID:         "test-ignore-id",
-						IssueID:    "test-issue-id",
 						Reason:     "test reason",
 						ReasonType: "wont-fix",
 						CreatedAt:  time.Now(),
-						Issue: snyk.Issue{
-							ID:   "test-issue-id",
-							Type: "code",
+						Path: []struct {
+							Module string `json:"module"`
+						}{
+							{Module: "test-module"},
 						},
+						IgnoredBy: snyk.User{
+							ID:    "test-user-id",
+							Name:  "Test User",
+							Email: "test@example.com",
+						},
+						DisregardIfFixable: false,
+						IgnoreScope:        "project",
 					},
 				}, nil
 			}
 
 			mockClient.GetSASTIssuesFunc = func(orgID, projectID string) ([]snyk.SASTIssue, error) {
 				Expect(orgID).To(Equal("test-org-id"))
-				Expect(projectID).To(Equal("test-project-id"))
+				Expect(projectID).To(Equal(""))
 				return []snyk.SASTIssue{
 					{
-						ID:        "test-issue-id",
-						AssetKey:  "test-asset-key",
-						IsIgnored: true,
-						ProjectID: "test-project-id",
+						ID:                     "test-ignore-id",
+						Type:                   "issue",
+						KeyAsset:               "test-asset-key",
+						Ignored:                true,
+						CreatedAt:              time.Now(),
+						Description:            "Test Issue",
+						EffectiveSeverityLevel: "medium",
+						Key:                    "test-key",
+						Status:                 "open",
+						Title:                  "Test Issue Title",
+						UpdatedAt:              time.Now(),
+						Classes: []struct {
+							ID     string `json:"id"`
+							Source string `json:"source"`
+							Type   string `json:"type"`
+						}{
+							{
+								ID:     "CWE-123",
+								Source: "CWE",
+								Type:   "weakness",
+							},
+						},
+						Coordinates: []struct {
+							IsFixableManually bool `json:"is_fixable_manually"`
+							IsFixableSnyk     bool `json:"is_fixable_snyk"`
+							IsFixableUpstream bool `json:"is_fixable_upstream"`
+							Representations   []struct {
+								SourceLocation struct {
+									CommitID string `json:"commit_id"`
+									File     string `json:"file"`
+									Region   struct {
+										End struct {
+											Column int `json:"column"`
+											Line   int `json:"line"`
+										} `json:"end"`
+										Start struct {
+											Column int `json:"column"`
+											Line   int `json:"line"`
+										} `json:"start"`
+									} `json:"region"`
+								} `json:"sourceLocation"`
+							} `json:"representations"`
+						}{
+							{
+								IsFixableManually: false,
+								IsFixableSnyk:     false,
+								IsFixableUpstream: false,
+								Representations: []struct {
+									SourceLocation struct {
+										CommitID string `json:"commit_id"`
+										File     string `json:"file"`
+										Region   struct {
+											End struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"end"`
+											Start struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"start"`
+										} `json:"region"`
+									} `json:"sourceLocation"`
+								}{
+									{
+										SourceLocation: struct {
+											CommitID string `json:"commit_id"`
+											File     string `json:"file"`
+											Region   struct {
+												End struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												} `json:"end"`
+												Start struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												} `json:"start"`
+											} `json:"region"`
+										}{
+											CommitID: "test-commit",
+											File:     "test.go",
+											Region: struct {
+												End struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												} `json:"end"`
+												Start struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												} `json:"start"`
+											}{
+												End: struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												}{
+													Column: 20,
+													Line:   100,
+												},
+												Start: struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												}{
+													Column: 1,
+													Line:   100,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+						Problems: []struct {
+							ID        string    `json:"id"`
+							Source    string    `json:"source"`
+							Type      string    `json:"type"`
+							UpdatedAt time.Time `json:"updated_at"`
+						}{
+							{
+								ID:        "test-problem-id",
+								Source:    "SNYK",
+								Type:      "vulnerability",
+								UpdatedAt: time.Now(),
+							},
+						},
+						Risk: struct {
+							Factors []string `json:"factors"`
+							Score   struct {
+								Model string `json:"model"`
+								Value int    `json:"value"`
+							} `json:"score"`
+						}{
+							Factors: []string{},
+							Score: struct {
+								Model string `json:"model"`
+								Value int    `json:"value"`
+							}{
+								Model: "v1",
+								Value: 363,
+							},
+						},
+						Relationships: struct {
+							Organization struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							} `json:"organization"`
+							ScanItem struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							} `json:"scan_item"`
+						}{
+							Organization: struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							}{
+								Data: struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								}{
+									ID:   "test-org-id",
+									Type: "organization",
+								},
+								Links: struct {
+									Related string `json:"related"`
+								}{
+									Related: "/orgs/test-org-id",
+								},
+							},
+							ScanItem: struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							}{
+								Data: struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								}{
+									ID:   "test-project-id",
+									Type: "scan_item",
+								},
+								Links: struct {
+									Related string `json:"related"`
+								}{
+									Related: "/scan-items/test-project-id",
+								},
+							},
+						},
 					},
 				}, nil
 			}
@@ -121,33 +329,36 @@ var _ = Describe("Gather Command", func() {
 			Expect(mockDB.InsertIgnoreCalls).To(HaveLen(1))
 			ignore := mockDB.InsertIgnoreCalls[0]
 			Expect(ignore.ID).To(Equal("test-ignore-id"))
-			Expect(ignore.IssueID).To(Equal("test-issue-id"))
+			Expect(ignore.IssueID).To(Equal("test-ignore-id"))
 			Expect(ignore.OrgID).To(Equal("test-org-id"))
 			Expect(ignore.ProjectID).To(Equal("test-project-id"))
 			Expect(ignore.Reason).To(Equal("test reason"))
 			Expect(ignore.IgnoreType).To(Equal("wont-fix"))
+			Expect(ignore.CreatedAt).To(BeTemporally("~", time.Now(), 1*time.Second))
 
 			// Verify that issues were stored
 			Expect(mockDB.InsertIssueCalls).To(HaveLen(1))
-			issue := mockDB.InsertIssueCalls[0]
-			Expect(issue.ID).To(Equal("test-issue-id"))
-			Expect(issue.OrgID).To(Equal("test-org-id"))
-			Expect(issue.ProjectID).To(Equal("test-project-id"))
-			Expect(issue.AssetKey).To(Equal("test-asset-key"))
+			insertedIssue := mockDB.InsertIssueCalls[0]
+			Expect(insertedIssue.ID).To(Equal("test-ignore-id"))
+			Expect(insertedIssue.OrgID).To(Equal("test-org-id"))
+			Expect(insertedIssue.ProjectID).To(Equal("test-project-id"))
+			Expect(insertedIssue.AssetKey).To(Equal("test-asset-key"))
+			Expect(insertedIssue.ProjectKey).To(Equal("test-key"))
 
-			// Verify that asset keys were updated in ignores
-			execCallFound := false
+			// Verify that the bulk update query for asset keys was executed
+			Expect(mockDB.ExecCalls).ToNot(BeEmpty(), "Expected Exec to be called for bulk update")
+			bulkUpdateCallFound := false
 			for _, call := range mockDB.ExecCalls {
-				if len(call.Args) == 4 &&
-					call.Args[0] == "test-asset-key" &&
-					call.Args[1] == "test-issue-id" &&
-					call.Args[2] == "test-org-id" &&
-					call.Args[3] == "test-project-id" {
-					execCallFound = true
+				// Check if the query contains the core part of the update statement
+				if strings.Contains(call.Query, "UPDATE ignores") && strings.Contains(call.Query, "SET asset_key = (") {
+					// Check if the org ID argument is correct
+					Expect(call.Args).To(HaveLen(1), "Expected 1 argument for the bulk update query")
+					Expect(call.Args[0]).To(Equal("test-org-id"), "Expected the correct org ID argument")
+					bulkUpdateCallFound = true
 					break
 				}
 			}
-			Expect(execCallFound).To(BeTrue(), "Expected to find an Exec call updating asset key")
+			Expect(bulkUpdateCallFound).To(BeTrue(), "Expected to find the Exec call for bulk updating ignore asset keys")
 
 			// Verify that collection metadata was updated
 			Expect(mockDB.UpdateCollectionMetadataCalls).To(HaveLen(1))
@@ -342,7 +553,7 @@ type MockClient struct {
 	GetIgnoresFunc       func(orgID, projectID string) ([]snyk.Ignore, error)
 	GetProjectTargetFunc func(orgID, projectID string) (*snyk.Target, error)
 	GetSASTIssuesFunc    func(orgID, projectID string) ([]snyk.SASTIssue, error)
-	CreatePolicyFunc     func(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error)
+	CreatePolicyFunc     func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
 	RetestProjectFunc    func(orgID, projectID string, target *snyk.Target) error
 	DeleteIgnoreFunc     func(orgID, projectID, ignoreID string) error
 }
@@ -353,8 +564,8 @@ func NewMockClient() *MockClient {
 		GetIgnoresFunc:       func(orgID, projectID string) ([]snyk.Ignore, error) { return []snyk.Ignore{}, nil },
 		GetProjectTargetFunc: func(orgID, projectID string) (*snyk.Target, error) { return &snyk.Target{}, nil },
 		GetSASTIssuesFunc:    func(orgID, projectID string) ([]snyk.SASTIssue, error) { return []snyk.SASTIssue{}, nil },
-		CreatePolicyFunc: func(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error) {
-			return "", nil
+		CreatePolicyFunc: func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error) {
+			return &snyk.Policy{ID: "mock-policy-id"}, nil
 		},
 		RetestProjectFunc: func(orgID, projectID string, target *snyk.Target) error { return nil },
 		DeleteIgnoreFunc:  func(orgID, projectID, ignoreID string) error { return nil },
@@ -378,8 +589,8 @@ func (m *MockClient) GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, e
 }
 
 // CreatePolicy implements the ClientInterface
-func (m *MockClient) CreatePolicy(orgID string, assetKey string, policyType string, reason string, expiresAt *time.Time) (string, error) {
-	return m.CreatePolicyFunc(orgID, assetKey, policyType, reason, expiresAt)
+func (m *MockClient) CreatePolicy(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error) {
+	return m.CreatePolicyFunc(orgID, attributes, meta)
 }
 
 // RetestProject implements the ClientInterface

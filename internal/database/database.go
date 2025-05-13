@@ -71,6 +71,7 @@ func initSchema(db *sql.DB) error {
 		org_id TEXT,
 		project_id TEXT,
 		asset_key TEXT,
+		project_key TEXT,
 		original_state TEXT
 	);
 
@@ -138,6 +139,7 @@ type Issue struct {
 	OrgID         string `json:"org_id"`
 	ProjectID     string `json:"project_id"`
 	AssetKey      string `json:"asset_key"`
+	ProjectKey    string `json:"project_key,omitempty"`
 	OriginalState string `json:"original_state"`
 }
 
@@ -200,12 +202,12 @@ func (db *DB) InsertIgnore(ignore *Ignore) error {
 func (db *DB) InsertIssue(issue *Issue) error {
 	query := `
 		INSERT INTO issues (
-			id, org_id, project_id, asset_key, original_state
-		) VALUES (?, ?, ?, ?, ?)
+			id, org_id, project_id, asset_key, project_key, original_state
+		) VALUES (?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := db.DB.Exec(query,
-		issue.ID, issue.OrgID, issue.ProjectID, issue.AssetKey, issue.OriginalState,
+		issue.ID, issue.OrgID, issue.ProjectID, issue.AssetKey, issue.ProjectKey, issue.OriginalState,
 	)
 	return err
 }
@@ -283,7 +285,7 @@ func (db *DB) GetIgnoresByOrgID(orgID string) ([]*Ignore, error) {
 
 // GetIssuesByOrgID retrieves all issues for a given organization
 func (db *DB) GetIssuesByOrgID(orgID string) ([]*Issue, error) {
-	query := `SELECT * FROM issues WHERE org_id = ?`
+	query := `SELECT id, org_id, project_id, asset_key, project_key, original_state FROM issues WHERE org_id = ?`
 
 	rows, err := db.DB.Query(query, orgID)
 	if err != nil {
@@ -295,7 +297,7 @@ func (db *DB) GetIssuesByOrgID(orgID string) ([]*Issue, error) {
 	for rows.Next() {
 		issue := &Issue{}
 		err := rows.Scan(
-			&issue.ID, &issue.OrgID, &issue.ProjectID, &issue.AssetKey, &issue.OriginalState,
+			&issue.ID, &issue.OrgID, &issue.ProjectID, &issue.AssetKey, &issue.ProjectKey, &issue.OriginalState,
 		)
 		if err != nil {
 			return nil, err
