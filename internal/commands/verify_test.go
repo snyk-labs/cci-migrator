@@ -82,7 +82,7 @@ func TestVerifyCommandExecute(t *testing.T) {
 
 			tt.setupMock(mockDB, mockClient)
 
-			cmd := commands.NewVerifyCommand(mockDB, mockClient, "org123")
+			cmd := commands.NewVerifyCommand(mockDB, mockClient, "org123", false)
 			err := cmd.Execute()
 
 			if tt.expectedError {

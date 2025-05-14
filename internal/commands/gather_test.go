@@ -24,7 +24,7 @@ var _ = Describe("Gather Command", func() {
 	BeforeEach(func() {
 		mockDB = NewMockDB()
 		mockClient = NewMockClient()
-		cmd = commands.NewGatherCommand(mockDB, mockClient, "test-org-id")
+		cmd = commands.NewGatherCommand(mockDB, mockClient, "test-org-id", false)
 	})
 
 	Describe("Execute", func() {
@@ -504,6 +504,7 @@ type MockDB struct {
 	ExecFunc                      func(query string, args ...interface{}) (interface{}, error)
 	QueryRowFunc                  func(query string, args ...interface{}) *sql.Row
 	QueryFunc                     func(query string, args ...interface{}) (interface{}, error)
+	BeginFunc                     func() (interface{}, error)
 }
 
 type MockExecCall struct {
@@ -534,6 +535,7 @@ func NewMockDB() *MockDB {
 		ExecFunc:                      func(query string, args ...interface{}) (interface{}, error) { return nil, nil },
 		QueryRowFunc:                  func(query string, args ...interface{}) *sql.Row { return sqlDB.QueryRow("SELECT 1") },
 		QueryFunc:                     func(query string, args ...interface{}) (interface{}, error) { return nil, nil },
+		BeginFunc:                     func() (interface{}, error) { return nil, nil },
 	}
 }
 
@@ -597,6 +599,50 @@ func (m *MockDB) GetProjectsByOrgID(orgID string) ([]*database.Project, error) {
 // GetPoliciesByOrgID implements the DatabaseInterface
 func (m *MockDB) GetPoliciesByOrgID(orgID string) ([]*database.Policy, error) {
 	return m.GetPoliciesByOrgIDFunc(orgID)
+}
+
+// Begin implements the DatabaseInterface
+func (m *MockDB) Begin() (interface{}, error) {
+	if m.BeginFunc != nil {
+		return m.BeginFunc()
+	}
+	tx := &MockTransaction{
+		ExecFunc: func(query string, args ...interface{}) (interface{}, error) {
+			return nil, nil
+		},
+		CommitFunc: func() error {
+			return nil
+		},
+		RollbackFunc: func() error {
+			return nil
+		},
+	}
+	return tx, nil
+}
+
+// MockTransaction is a mock implementation of TransactionInterface
+type MockTransaction struct {
+	ExecCalls      []MockExecCall
+	ExecFunc       func(query string, args ...interface{}) (interface{}, error)
+	CommitFunc     func() error
+	RollbackFunc   func() error
+	CommitCalled   bool
+	RollbackCalled bool
+}
+
+func (m *MockTransaction) Exec(query string, args ...interface{}) (interface{}, error) {
+	m.ExecCalls = append(m.ExecCalls, MockExecCall{Query: query, Args: args})
+	return m.ExecFunc(query, args...)
+}
+
+func (m *MockTransaction) Commit() error {
+	m.CommitCalled = true
+	return m.CommitFunc()
+}
+
+func (m *MockTransaction) Rollback() error {
+	m.RollbackCalled = true
+	return m.RollbackFunc()
 }
 
 // Mock Client implementation

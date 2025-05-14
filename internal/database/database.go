@@ -15,10 +15,15 @@ type DB struct {
 
 // New creates a new database connection
 func New(dbPath string) (*DB, error) {
-	sqlDB, err := sql.Open("sqlite3", dbPath)
+	// Add busy_timeout=10000 to wait up to 10 seconds when database is locked
+	// This is the most important parameter for preventing "database is locked" errors
+	sqlDB, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=10000")
 	if err != nil {
 		return nil, err
 	}
+
+	// Limit connections to prevent concurrent write operations
+	sqlDB.SetMaxOpenConns(1)
 
 	db := &DB{sqlDB}
 
@@ -43,6 +48,35 @@ func (db *DB) QueryRow(query string, args ...interface{}) *sql.Row {
 // Query executes a query that returns rows
 func (db *DB) Query(query string, args ...interface{}) (interface{}, error) {
 	return db.DB.Query(query, args...)
+}
+
+// Begin starts a transaction
+func (db *DB) Begin() (interface{}, error) {
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	return &Transaction{tx}, nil
+}
+
+// Transaction wraps a sql.Tx
+type Transaction struct {
+	*sql.Tx
+}
+
+// Exec executes a query within a transaction without returning any rows
+func (tx *Transaction) Exec(query string, args ...interface{}) (interface{}, error) {
+	return tx.Tx.Exec(query, args...)
+}
+
+// Commit commits the transaction
+func (tx *Transaction) Commit() error {
+	return tx.Tx.Commit()
+}
+
+// Rollback aborts the transaction
+func (tx *Transaction) Rollback() error {
+	return tx.Tx.Rollback()
 }
 
 // initSchema creates the database tables if they don't exist

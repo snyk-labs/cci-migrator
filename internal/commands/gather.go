@@ -30,7 +30,15 @@ type DatabaseInterface interface {
 	Exec(query string, args ...interface{}) (interface{}, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
 	Query(query string, args ...interface{}) (interface{}, error)
+	Begin() (interface{}, error)
 	Close() error
+}
+
+// TransactionInterface defines database transaction operations
+type TransactionInterface interface {
+	Exec(query string, args ...interface{}) (interface{}, error)
+	Commit() error
+	Rollback() error
 }
 
 // ClientInterface defines the Snyk API operations needed by the GatherCommand
