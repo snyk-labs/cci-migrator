@@ -45,10 +45,10 @@ type TransactionInterface interface {
 type ClientInterface interface {
 	GetProjects(orgID string) ([]snyk.Project, error)
 	GetIgnores(orgID, projectID string) ([]snyk.Ignore, error)
-	GetProjectTarget(orgID, projectID string) (*snyk.Target, error)
+	GetProjectTarget(orgID, targetID string) (*snyk.Target, error)
 	GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, error)
 	CreatePolicy(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
-	RetestProject(orgID, projectID string, target *snyk.Target) error
+	RetestProject(orgID string, target *snyk.Target) error
 	DeleteIgnore(orgID, projectID, ignoreID string) error
 }
 
@@ -93,11 +93,23 @@ func (c *GatherCommand) Execute() error {
 	for _, project := range projects {
 		log.Printf("Processing project: %s (%s)", project.Name, project.ID)
 
-		// Get and store target information
-		target, err := c.client.GetProjectTarget(c.orgID, project.ID)
+		// Get and store target information using the target ID already provided in the project attributes
+		targetID := project.Target.ID
+		if targetID == "" {
+			// If for some reason the target ID is missing, skip and warn
+			log.Printf("Warning: target_id missing for project %s, skipping target retrieval", project.ID)
+			continue
+		}
+
+		target, err := c.client.GetProjectTarget(c.orgID, targetID)
 		if err != nil {
 			log.Printf("Warning: failed to get target for project %s: %v", project.ID, err)
 			continue
+		}
+
+		// Add the target_reference from the project to the target information
+		if project.TargetReference != "" {
+			target.Branch = project.TargetReference
 		}
 
 		targetInfo, err := json.Marshal(target)

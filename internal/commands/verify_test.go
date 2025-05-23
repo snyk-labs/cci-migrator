@@ -72,7 +72,7 @@ func TestVerifyCommandExecute(t *testing.T) {
 				return &snyk.Policy{ID: "policy-id"}, nil
 			}
 
-			mockClient.RetestProjectFunc = func(orgID, projectID string, target *snyk.Target) error {
+			mockClient.RetestProjectFunc = func(orgID string, target *snyk.Target) error {
 				return nil
 			}
 

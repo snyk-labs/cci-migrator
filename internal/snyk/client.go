@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -159,14 +160,19 @@ type SASTIssue struct {
 
 // Target represents information about a project's target
 type Target struct {
-	Name    string                 `json:"name"`
-	Branch  string                 `json:"branch"`
-	Owner   string                 `json:"owner"`
-	Repo    string                 `json:"repo"`
-	URL     string                 `json:"url"`
-	Origin  string                 `json:"origin"`
-	Source  string                 `json:"source"`
-	Options map[string]interface{} `json:"options"`
+	Name          string                 `json:"name"`
+	Branch        string                 `json:"branch"`
+	Owner         string                 `json:"owner"`
+	Repo          string                 `json:"repo"`
+	URL           string                 `json:"url"`
+	Origin        string                 `json:"origin"`
+	Source        string                 `json:"source"`
+	Options       map[string]interface{} `json:"options"`
+	ID            string                 `json:"id,omitempty"`
+	IntegrationID string                 `json:"integration_id,omitempty"`
+	DisplayName   string                 `json:"display_name,omitempty"`
+	IsPrivate     bool                   `json:"is_private,omitempty"`
+	CreatedAt     time.Time              `json:"created_at,omitempty"`
 }
 
 // RateLimitError represents a rate limit error from the Snyk API
@@ -448,16 +454,28 @@ type Project struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	} `json:"tags"`
-	Target Target `json:"target,omitempty"`
+	TargetReference string `json:"target_reference"`
+	Target          Target `json:"-"` // Using json:"-" since this comes from relationships, not attributes
+}
+
+// ProjectResponse represents a single project in the JSON:API response
+type ProjectResponse struct {
+	ID            string  `json:"id"`
+	Type          string  `json:"type"`
+	Attributes    Project `json:"attributes"`
+	Relationships struct {
+		Target struct {
+			Data struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			} `json:"data"`
+		} `json:"target"`
+	} `json:"relationships"`
 }
 
 // ProjectsResponse represents the JSON:API response for projects
 type ProjectsResponse struct {
-	Data []struct {
-		ID         string  `json:"id"`
-		Type       string  `json:"type"`
-		Attributes Project `json:"attributes"`
-	} `json:"data"`
+	Data []ProjectResponse `json:"data"`
 }
 
 // GetProjects retrieves all projects for a given organization using the REST API
@@ -496,67 +514,145 @@ func (c *Client) GetProjects(orgID string) ([]Project, error) {
 	for i, item := range response.Data {
 		projects[i] = item.Attributes
 		projects[i].ID = item.ID // Ensure ID is set from the data object
+
+		// Set the target ID from the relationships section
+		if item.Relationships.Target.Data.ID != "" {
+			projects[i].Target = Target{
+				ID: item.Relationships.Target.Data.ID,
+			}
+		}
 	}
 
 	return projects, nil
 }
 
-// GetProjectTarget retrieves target information for a given project
-func (c *Client) GetProjectTarget(orgID, projectID string) (*Target, error) {
-	url := fmt.Sprintf("%s/orgs/%s/projects/%s?version=2024-10-15", c.RestBaseURL, orgID, projectID)
+// GetProjectTarget retrieves the target details for a given project. The REST API
+// does not embed the full target information inside the project response – it
+// only exposes a target_id. Therefore, the method performs two requests:
+//  1. GET /orgs/{org_id}/projects/{project_id} to obtain the target_id
+//  2. GET /orgs/{org_id}/targets/{target_id}  to obtain the target details
+//
+// The data returned by the second call is then mapped into the legacy Target
+// struct so that the rest of the codebase (e.g. RetestProject) continues to
+// work unchanged.
+func (c *Client) GetProjectTarget(orgID, targetID string) (*Target, error) {
+	// Fetch the target details directly using the provided targetID.
 
-	req, err := http.NewRequest("GET", url, nil)
+	targetURL := fmt.Sprintf("%s/orgs/%s/targets/%s?version=2024-10-15", c.RestBaseURL, orgID, targetID)
+
+	tReq, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create target request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, nil)
+	tReq.Header.Set("Authorization", "token "+c.Token)
+	tReq.Header.Set("Accept", "application/vnd.api+json")
+	c.debugRequest(tReq, nil)
 
-	resp, err := c.HTTPClient.Do(req)
+	tResp, err := c.HTTPClient.Do(tReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+		return nil, fmt.Errorf("failed to execute target request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer tResp.Body.Close()
 
 	if c.Debug {
-		c.debugResponse(resp)
+		c.debugResponse(tResp)
 	}
 
-	if err := c.handleResponse(resp); err != nil {
+	if err := c.handleResponse(tResp); err != nil {
 		return nil, err
 	}
 
-	type ProjectData struct {
-		ID         string  `json:"id"`
-		Type       string  `json:"type"`
-		Attributes Project `json:"attributes"`
+	// Minimal struct to capture the relevant fields from the target response
+	var targetResp struct {
+		Data struct {
+			ID         string `json:"id"`
+			Type       string `json:"type"`
+			Attributes struct {
+				CreatedAt   time.Time `json:"created_at"`
+				DisplayName string    `json:"display_name"`
+				IsPrivate   bool      `json:"is_private"`
+				URL         string    `json:"url"`
+			} `json:"attributes"`
+			Relationships struct {
+				Integration struct {
+					Data struct {
+						Attributes struct {
+							IntegrationType string `json:"integration_type"`
+						} `json:"attributes"`
+						ID   string `json:"id"`
+						Type string `json:"type"`
+					} `json:"data"`
+				} `json:"integration"`
+			} `json:"relationships"`
+		} `json:"data"`
 	}
 
-	type Response struct {
-		Data ProjectData `json:"data"`
+	if err := json.NewDecoder(tResp.Body).Decode(&targetResp); err != nil {
+		return nil, fmt.Errorf("failed to decode target response: %w", err)
 	}
 
-	var response Response
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	attrs := targetResp.Data.Attributes
+
+	// Map the response into the legacy Target struct so the rest of the code
+	// continues to work without modification.
+	tgt := &Target{
+		Name:          attrs.DisplayName,
+		DisplayName:   attrs.DisplayName,
+		URL:           attrs.URL,
+		CreatedAt:     attrs.CreatedAt,
+		IsPrivate:     attrs.IsPrivate,
+		ID:            targetResp.Data.ID,
+		IntegrationID: targetResp.Data.Relationships.Integration.Data.ID,
+		Options:       make(map[string]interface{}),
 	}
 
-	return &response.Data.Attributes.Target, nil
+	// Attempt to parse owner / repo from the display name if it follows the
+	// conventional "owner/repo" pattern (as observed in the REST API docs).
+	if parts := strings.Split(attrs.DisplayName, "/"); len(parts) == 2 {
+		tgt.Owner = parts[0]
+		tgt.Repo = parts[1]
+	}
+
+	// The branch, origin and source fields are not provided by the target API
+	// endpoint. They remain empty, but the struct fields stay present for
+	// backwards-compatibility with other parts of the codebase.
+
+	if tgt.ID == "" {
+		// Ensure the ID is always populated (older API versions may omit it in attributes)
+		tgt.ID = targetResp.Data.ID
+	}
+
+	return tgt, nil
 }
 
-// RetestProject initiates a retest for a given project (can't affect API behavior)
-func (c *Client) RetestProject(orgID, projectID string, target *Target) error {
-	url := fmt.Sprintf("%s/org/%s/integrations/imports", c.V1BaseURL, orgID)
+// RetestProject initiates a retest for a given target via its integration import endpoint
+func (c *Client) RetestProject(orgID string, target *Target) error {
+	// The import endpoint must be called on the integration that owns the target.
+	integrationID := strings.TrimSpace(target.IntegrationID)
+	if integrationID == "" {
+		return fmt.Errorf("target missing integration_id – cannot trigger import")
+	}
 
-	// Create import payload based on target information
+	url := fmt.Sprintf("%s/org/%s/integrations/%s/import", c.V1BaseURL, orgID, integrationID)
+
+	// Create simplified import payload with only the necessary fields
+	type SimpleTarget struct {
+		Owner  string `json:"owner"`
+		Name   string `json:"name"`
+		Branch string `json:"branch"`
+	}
+
 	type ImportPayload struct {
-		Target Target `json:"target"`
+		Target SimpleTarget `json:"target"`
 	}
 
 	payload := ImportPayload{
-		Target: *target,
+		Target: SimpleTarget{
+			Owner:  target.Owner,
+			Name:   target.Repo,
+			Branch: target.Branch,
+		},
 	}
 
 	body, err := json.Marshal(payload)
@@ -583,7 +679,7 @@ func (c *Client) RetestProject(orgID, projectID string, target *Target) error {
 		c.debugResponse(resp)
 	}
 
-	if resp.StatusCode != http.StatusAccepted {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
 	}
 

@@ -3,6 +3,7 @@ package snyk
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -31,11 +32,7 @@ var _ = Describe("Snyk Client", func() {
 				Expect(query.Get("types")).To(Equal("sast"))
 
 				response := ProjectsResponse{
-					Data: []struct {
-						ID         string  `json:"id"`
-						Type       string  `json:"type"`
-						Attributes Project `json:"attributes"`
-					}{
+					Data: []ProjectResponse{
 						{
 							ID:   "test-project-id",
 							Type: "project",
@@ -58,6 +55,29 @@ var _ = Describe("Snyk Client", func() {
 									},
 								},
 							},
+							Relationships: struct {
+								Target struct {
+									Data struct {
+										Type string `json:"type"`
+										ID   string `json:"id"`
+									} `json:"data"`
+								} `json:"target"`
+							}{
+								Target: struct {
+									Data struct {
+										Type string `json:"type"`
+										ID   string `json:"id"`
+									} `json:"data"`
+								}{
+									Data: struct {
+										Type string `json:"type"`
+										ID   string `json:"id"`
+									}{
+										Type: "target",
+										ID:   "test-target-id",
+									},
+								},
+							},
 						},
 					},
 				}
@@ -65,41 +85,11 @@ var _ = Describe("Snyk Client", func() {
 				json.NewEncoder(w).Encode(response)
 				return
 			}
-			// Default to not found if no specific handler matches
-			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprintf(w, "Endpoint %s not handled by this test server", r.URL.Path)
-		}))
 
-		client = &Client{
-			HTTPClient:  http.DefaultClient,
-			Token:       "test-token",
-			V1BaseURL:   server.URL, // For older APIs if any
-			RestBaseURL: server.URL,
-		}
-	})
-
-	AfterEach(func() {
-		server.Close()
-	})
-
-	Describe("GetProjects", func() {
-		It("should retrieve projects successfully", func() {
-			projects, err := client.GetProjects("test-org")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(projects).To(HaveLen(1))
-
-			project := projects[0]
-			Expect(project.ID).To(Equal("test-project-id"))
-			Expect(project.Name).To(Equal("Test Project"))
-		})
-	})
-
-	Describe("GetIgnores", func() {
-		BeforeEach(func() {
-			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// For GetIgnores initial setup:
+			if r.URL.Path == "/org/test-org/project/test-project/ignores" {
 				Expect(r.Method).To(Equal("GET"))
 				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
-				Expect(r.URL.Path).To(Equal("/org/test-org/project/test-project/ignores"))
 
 				// Create a response that matches the real-world format
 				ignoreID := "fd9809b0-3482-4fb5-8785-25f61ec18cdd"
@@ -127,7 +117,211 @@ var _ = Describe("Snyk Client", func() {
 
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(response)
+				return
+			}
+
+			// Default to not found if no specific handler matches
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, "Endpoint %s not handled by this test server", r.URL.Path)
+		}))
+
+		client = &Client{
+			HTTPClient:  http.DefaultClient,
+			Token:       "test-token",
+			V1BaseURL:   server.URL, // For older APIs if any
+			RestBaseURL: server.URL,
+		}
+	})
+
+	AfterEach(func() {
+		server.Close()
+	})
+
+	Describe("GetProjects", func() {
+		It("should retrieve projects successfully", func() {
+			projects, err := client.GetProjects("test-org")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(projects).To(HaveLen(1))
+
+			project := projects[0]
+			Expect(project.ID).To(Equal("test-project-id"))
+			Expect(project.Name).To(Equal("Test Project"))
+		})
+
+		It("should correctly unmarshal complex JSON response", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+				rawResponse := `{
+					"jsonapi": {
+						"version": "1.0"
+					},
+					"data": [
+						{
+							"type": "project",
+							"id": "d736dc68-45be-458b-b1af-426fc5cf79c8",
+							"meta": {},
+							"attributes": {
+								"name": "goofy/nodejs-goof(main)",
+								"type": "sast",
+								"target_file": "",
+								"target_reference": "main",
+								"origin": "bitbucket-server",
+								"created": "2025-03-20T16:33:54.128Z",
+								"status": "active",
+								"business_criticality": [],
+								"environment": [],
+								"lifecycle": [],
+								"tags": []
+							},
+							"relationships": {
+								"organization": {
+									"data": {
+										"type": "org",
+										"id": "3f1f2737-d0f0-4222-805d-264bd94b87b0"
+									}
+								},
+								"target": {
+									"data": {
+										"type": "target",
+										"id": "cc3d2e15-63c6-46bf-8d0f-62f1fef44203"
+									}
+								}
+							}
+						}
+					]
+				}`
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				w.Write([]byte(rawResponse))
 			})
+
+			projects, err := client.GetProjects("test-org")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(projects).To(HaveLen(1))
+
+			project := projects[0]
+			Expect(project.ID).To(Equal("d736dc68-45be-458b-b1af-426fc5cf79c8"))
+			Expect(project.Name).To(Equal("goofy/nodejs-goof(main)"))
+			Expect(project.Type).To(Equal("sast"))
+			Expect(project.Origin).To(Equal("bitbucket-server"))
+			Expect(project.Status).To(Equal("active"))
+			Expect(project.Created).To(Equal(time.Date(2025, 3, 20, 16, 33, 54, 128000000, time.UTC)))
+			Expect(project.BusinessCriticality).To(BeEmpty())
+			Expect(project.Environment).To(BeEmpty())
+			Expect(project.Lifecycle).To(BeEmpty())
+			Expect(project.Tags).To(BeEmpty())
+		})
+
+		It("should correctly set target ID from relationships", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+				rawResponse := `{
+					"jsonapi": {
+						"version": "1.0"
+					},
+					"data": [
+						{
+							"type": "project",
+							"id": "d736dc68-45be-458b-b1af-426fc5cf79c8",
+							"meta": {},
+							"attributes": {
+								"name": "goofy/nodejs-goof(main)",
+								"type": "sast",
+								"target_file": "",
+								"target_reference": "main",
+								"origin": "bitbucket-server",
+								"created": "2025-03-20T16:33:54.128Z",
+								"status": "active",
+								"target": {
+									"id": "wrong-target-id",
+									"name": "wrong-target-name"
+								}
+							},
+							"relationships": {
+								"target": {
+									"data": {
+										"type": "target",
+										"id": "cc3d2e15-63c6-46bf-8d0f-62f1fef44203"
+									}
+								}
+							}
+						}
+					]
+				}`
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				w.Write([]byte(rawResponse))
+			})
+
+			projects, err := client.GetProjects("test-org")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(projects).To(HaveLen(1))
+
+			project := projects[0]
+			Expect(project.Target.ID).To(Equal("cc3d2e15-63c6-46bf-8d0f-62f1fef44203"), "Target ID should be set from relationships, not attributes")
+		})
+
+		It("should ignore target information from attributes section", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+				rawResponse := `{
+					"jsonapi": {
+						"version": "1.0"
+					},
+					"data": [
+						{
+							"type": "project",
+							"id": "d736dc68-45be-458b-b1af-426fc5cf79c8",
+							"meta": {},
+							"attributes": {
+								"name": "goofy/nodejs-goof(main)",
+								"type": "sast",
+								"target_file": "",
+								"target_reference": "main",
+								"origin": "bitbucket-server",
+								"created": "2025-03-20T16:33:54.128Z",
+								"status": "active",
+								"target": {
+									"id": "wrong-target-id",
+									"name": "wrong-target-name",
+									"branch": "wrong-branch",
+									"owner": "wrong-owner",
+									"repo": "wrong-repo",
+									"url": "wrong-url",
+									"origin": "wrong-origin",
+									"source": "wrong-source"
+								}
+							}
+						}
+					]
+				}`
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				w.Write([]byte(rawResponse))
+			})
+
+			projects, err := client.GetProjects("test-org")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(projects).To(HaveLen(1))
+
+			project := projects[0]
+			Expect(project.Target.ID).To(BeEmpty(), "Target ID should be empty since it was only in attributes")
+			Expect(project.Target.Name).To(BeEmpty(), "Target name should be empty since it was only in attributes")
+			Expect(project.Target.Branch).To(BeEmpty(), "Target branch should be empty since it was only in attributes")
+			Expect(project.Target.Owner).To(BeEmpty(), "Target owner should be empty since it was only in attributes")
+			Expect(project.Target.Repo).To(BeEmpty(), "Target repo should be empty since it was only in attributes")
+			Expect(project.Target.URL).To(BeEmpty(), "Target URL should be empty since it was only in attributes")
+			Expect(project.Target.Origin).To(BeEmpty(), "Target origin should be empty since it was only in attributes")
+			Expect(project.Target.Source).To(BeEmpty(), "Target source should be empty since it was only in attributes")
 		})
 
 		It("should retrieve ignores successfully", func() {
@@ -142,6 +336,90 @@ var _ = Describe("Snyk Client", func() {
 			Expect(ignores[0].IgnoredBy.ID).To(Equal("user-123"))
 			Expect(ignores[0].Path).To(HaveLen(1))
 			Expect(ignores[0].Path[0].Module).To(Equal("*"))
+		})
+	})
+
+	Describe("RetestProject", func() {
+		It("should send simplified target payload with only owner, name, and branch", func() {
+			var requestBody []byte
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("POST"))
+				Expect(r.URL.Path).To(Equal("/org/test-org/integrations/test-integration-id/import"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
+
+				// Read the request body
+				var err error
+				requestBody, err = io.ReadAll(r.Body)
+				Expect(err).NotTo(HaveOccurred())
+
+				w.WriteHeader(http.StatusAccepted)
+			})
+
+			target := &Target{
+				Owner:         "test-owner",
+				Repo:          "test-repo",
+				Branch:        "main",
+				IntegrationID: "test-integration-id",
+				// These fields should NOT be included in the simplified payload
+				URL:    "https://github.com/test-owner/test-repo",
+				Origin: "github",
+				Source: "github",
+				Name:   "full-target-name",
+			}
+
+			err := client.RetestProject("test-org", target)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the request body contains only the simplified target
+			var payload map[string]interface{}
+			err = json.Unmarshal(requestBody, &payload)
+			Expect(err).NotTo(HaveOccurred())
+
+			targetPayload, ok := payload["target"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "target should be present in payload")
+
+			// Should only contain owner, name, and branch
+			Expect(targetPayload).To(HaveLen(3))
+			Expect(targetPayload["owner"]).To(Equal("test-owner"))
+			Expect(targetPayload["name"]).To(Equal("test-repo"))
+			Expect(targetPayload["branch"]).To(Equal("main"))
+
+			// Should NOT contain these fields
+			Expect(targetPayload).NotTo(HaveKey("url"))
+			Expect(targetPayload).NotTo(HaveKey("origin"))
+			Expect(targetPayload).NotTo(HaveKey("source"))
+			Expect(targetPayload).NotTo(HaveKey("integration_id"))
+		})
+
+		It("should return error when integration_id is missing", func() {
+			target := &Target{
+				Owner:  "test-owner",
+				Repo:   "test-repo",
+				Branch: "main",
+				// IntegrationID is missing
+			}
+
+			err := client.RetestProject("test-org", target)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("target missing integration_id"))
+		})
+	})
+
+	Describe("DeleteIgnore", func() {
+		BeforeEach(func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("DELETE"))
+				Expect(r.URL.Path).To(Equal("/org/test-org/project/test-project/ignore/test-ignore-id"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+
+				w.WriteHeader(http.StatusNoContent)
+			})
+		})
+
+		It("should delete an ignore successfully", func() {
+			err := client.DeleteIgnore("test-org", "test-project", "test-ignore-id")
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 

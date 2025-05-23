@@ -248,10 +248,17 @@ func (db *DB) InsertIssue(issue *Issue) error {
 
 // InsertProject inserts a new project into the database
 func (db *DB) InsertProject(project *Project) error {
+	// Use UPSERT semantics to ensure we always have the most recent target information.
+	// We intentionally leave retested_at unchanged on conflict so the retest workflow
+	// can still rely on that value.
 	query := `
 		INSERT INTO projects (
 			id, org_id, name, target_information, retested_at
 		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			org_id = excluded.org_id,
+			target_information = excluded.target_information
 	`
 
 	_, err := db.DB.Exec(query,

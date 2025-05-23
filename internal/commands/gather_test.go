@@ -37,13 +37,16 @@ var _ = Describe("Gather Command", func() {
 						ID:   "test-project-id",
 						Name: "Test Project",
 						Type: "sast",
+						Target: snyk.Target{
+							ID: "test-target-id",
+						},
 					},
 				}, nil
 			}
 
-			mockClient.GetProjectTargetFunc = func(orgID, projectID string) (*snyk.Target, error) {
+			mockClient.GetProjectTargetFunc = func(orgID, targetID string) (*snyk.Target, error) {
 				Expect(orgID).To(Equal("test-org-id"))
-				Expect(projectID).To(Equal("test-project-id"))
+				Expect(targetID).To(Equal("test-target-id"))
 				return &snyk.Target{
 					Name:   "test-repo",
 					Branch: "main",
@@ -649,10 +652,10 @@ func (m *MockTransaction) Rollback() error {
 type MockClient struct {
 	GetProjectsFunc      func(orgID string) ([]snyk.Project, error)
 	GetIgnoresFunc       func(orgID, projectID string) ([]snyk.Ignore, error)
-	GetProjectTargetFunc func(orgID, projectID string) (*snyk.Target, error)
+	GetProjectTargetFunc func(orgID, targetID string) (*snyk.Target, error)
 	GetSASTIssuesFunc    func(orgID, projectID string) ([]snyk.SASTIssue, error)
 	CreatePolicyFunc     func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
-	RetestProjectFunc    func(orgID, projectID string, target *snyk.Target) error
+	RetestProjectFunc    func(orgID string, target *snyk.Target) error
 	DeleteIgnoreFunc     func(orgID, projectID, ignoreID string) error
 }
 
@@ -660,12 +663,12 @@ func NewMockClient() *MockClient {
 	return &MockClient{
 		GetProjectsFunc:      func(orgID string) ([]snyk.Project, error) { return []snyk.Project{}, nil },
 		GetIgnoresFunc:       func(orgID, projectID string) ([]snyk.Ignore, error) { return []snyk.Ignore{}, nil },
-		GetProjectTargetFunc: func(orgID, projectID string) (*snyk.Target, error) { return &snyk.Target{}, nil },
+		GetProjectTargetFunc: func(orgID, targetID string) (*snyk.Target, error) { return &snyk.Target{}, nil },
 		GetSASTIssuesFunc:    func(orgID, projectID string) ([]snyk.SASTIssue, error) { return []snyk.SASTIssue{}, nil },
 		CreatePolicyFunc: func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error) {
 			return &snyk.Policy{ID: "mock-policy-id"}, nil
 		},
-		RetestProjectFunc: func(orgID, projectID string, target *snyk.Target) error { return nil },
+		RetestProjectFunc: func(orgID string, target *snyk.Target) error { return nil },
 		DeleteIgnoreFunc:  func(orgID, projectID, ignoreID string) error { return nil },
 	}
 }
@@ -678,8 +681,8 @@ func (m *MockClient) GetIgnores(orgID, projectID string) ([]snyk.Ignore, error) 
 	return m.GetIgnoresFunc(orgID, projectID)
 }
 
-func (m *MockClient) GetProjectTarget(orgID, projectID string) (*snyk.Target, error) {
-	return m.GetProjectTargetFunc(orgID, projectID)
+func (m *MockClient) GetProjectTarget(orgID, targetID string) (*snyk.Target, error) {
+	return m.GetProjectTargetFunc(orgID, targetID)
 }
 
 func (m *MockClient) GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, error) {
@@ -692,8 +695,8 @@ func (m *MockClient) CreatePolicy(orgID string, attributes snyk.CreatePolicyAttr
 }
 
 // RetestProject implements the ClientInterface
-func (m *MockClient) RetestProject(orgID, projectID string, target *snyk.Target) error {
-	return m.RetestProjectFunc(orgID, projectID, target)
+func (m *MockClient) RetestProject(orgID string, target *snyk.Target) error {
+	return m.RetestProjectFunc(orgID, target)
 }
 
 // DeleteIgnore implements the ClientInterface

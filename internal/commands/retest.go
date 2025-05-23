@@ -73,8 +73,60 @@ func (c *RetestCommand) Execute() error {
 			continue
 		}
 
+		// If the target information is empty, fetch it from the API and update the database
+		if target.Name == "" && target.URL == "" && target.Owner == "" && target.Repo == "" && target.Branch == "" && target.Origin == "" && target.Source == "" {
+			// We don't have the target information yet; fetch the target ID via projects API
+			projects, err := c.client.GetProjects(c.orgID)
+			if err != nil {
+				log.Printf("Warning: failed to fetch projects to determine target_id for project %s: %v", projectID, err)
+				failedRetests++
+				continue
+			}
+
+			var targetID string
+			var targetReference string
+			for _, p := range projects {
+				if p.ID == projectID {
+					targetID = p.Target.ID
+					targetReference = p.TargetReference
+					break
+				}
+			}
+
+			if targetID == "" {
+				log.Printf("Warning: could not determine target_id for project %s", projectID)
+				failedRetests++
+				continue
+			}
+
+			apiTarget, err := c.client.GetProjectTarget(c.orgID, targetID)
+			if err != nil {
+				log.Printf("Warning: failed to fetch target information from API for project %s: %v", projectID, err)
+				failedRetests++
+				continue
+			}
+
+			// Add the target_reference as the branch if available
+			if targetReference != "" {
+				apiTarget.Branch = targetReference
+			}
+
+			target = *apiTarget
+
+			// Update the database with fresh target information so future runs have it available
+			targetBytes, _ := json.Marshal(apiTarget)
+			_, err = c.db.Exec(`
+				UPDATE projects
+				SET target_information = ?
+				WHERE id = ?
+			`, string(targetBytes), projectID)
+			if err != nil {
+				log.Printf("Warning: failed to update target information for project %s: %v", projectID, err)
+			}
+		}
+
 		// Call Import API to retest
-		err = c.client.RetestProject(c.orgID, projectID, &target)
+		err = c.client.RetestProject(c.orgID, &target)
 		if err != nil {
 			log.Printf("Warning: failed to retest project %s: %v", projectID, err)
 			failedRetests++
