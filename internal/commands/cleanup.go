@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -47,42 +48,120 @@ func (c *CleanupCommand) Execute() error {
 	if !ok {
 		return fmt.Errorf("unexpected query result type")
 	}
-	defer rows.Close()
 
-	var totalIgnores, deletedIgnores, failedDeletions int
+	// Collect all ignores to process (to avoid holding cursor during updates)
+	type ignoreData struct {
+		ID        string
+		ProjectID string
+	}
 
+	var ignores []ignoreData
 	for rows.Next() {
 		var ignoreID, projectID string
 		err := rows.Scan(&ignoreID, &projectID)
 		if err != nil {
+			rows.Close()
 			return fmt.Errorf("failed to scan ignore: %w", err)
 		}
 
-		totalIgnores++
-		log.Printf("Deleting ignore %d: %s from project %s", totalIgnores, ignoreID, projectID)
+		ignores = append(ignores, ignoreData{
+			ID:        ignoreID,
+			ProjectID: projectID,
+		})
+	}
+	rows.Close()
+
+	var totalIgnores, deletedIgnores, failedDeletions int
+	totalIgnores = len(ignores)
+
+	// Process each ignore
+	for i, ignore := range ignores {
+		log.Printf("Deleting ignore %d/%d: %s from project %s", i+1, totalIgnores, ignore.ID, ignore.ProjectID)
 
 		// Delete the ignore using the V1 API
-		err = c.client.DeleteIgnore(c.orgID, projectID, ignoreID)
+		err = c.client.DeleteIgnore(c.orgID, ignore.ProjectID, ignore.ID)
 		if err != nil {
-			log.Printf("Warning: failed to delete ignore %s: %v", ignoreID, err)
+			log.Printf("Warning: failed to delete ignore %s: %v", ignore.ID, err)
 			failedDeletions++
 			continue
 		}
 
-		// Mark ignore as deleted
-		now := time.Now()
-		_, err = c.db.Exec(`
-			UPDATE ignores
-			SET deleted_at = ?
-			WHERE id = ?
-		`, now, ignoreID)
-		if err != nil {
-			log.Printf("Warning: failed to mark ignore as deleted: %v", err)
+		// Mark ignore as deleted with transaction retry logic
+		var transactionError error
+		for retryCount := 0; retryCount < 3; retryCount++ {
+			if retryCount > 0 {
+				log.Printf("Retrying transaction for ignore %s (attempt %d/3)...", ignore.ID, retryCount+1)
+				// Add a small delay before retrying to allow locks to clear
+				time.Sleep(time.Duration(retryCount) * 500 * time.Millisecond)
+			}
+
+			// Begin a transaction for this database update
+			txResult, err := c.db.Begin()
+			if err != nil {
+				log.Printf("Warning: failed to begin transaction: %v", err)
+				transactionError = err
+				continue // Try again
+			}
+
+			tx, ok := txResult.(interface {
+				Exec(query string, args ...interface{}) (interface{}, error)
+				Commit() error
+				Rollback() error
+			})
+			if !ok {
+				log.Printf("Warning: unexpected transaction type")
+				transactionError = fmt.Errorf("unexpected transaction type")
+				continue // Try again
+			}
+
+			// Mark ignore as deleted within the transaction
+			now := time.Now()
+			_, err = tx.Exec(`
+				UPDATE ignores
+				SET deleted_at = ?
+				WHERE id = ?
+			`, now, ignore.ID)
+			if err != nil {
+				log.Printf("Warning: failed to mark ignore as deleted: %v", err)
+				// Rollback and check if we should retry
+				if rollbackErr := tx.Rollback(); rollbackErr != nil {
+					log.Printf("Warning: failed to rollback transaction: %v", rollbackErr)
+				}
+				// If this is a locking error, try again
+				if strings.Contains(err.Error(), "locked") {
+					transactionError = err
+					continue
+				}
+				transactionError = err
+				break // Permanent error, don't retry
+			}
+
+			// Commit the transaction
+			if err := tx.Commit(); err != nil {
+				log.Printf("Warning: failed to commit transaction: %v", err)
+				// If this is a locking error, try again
+				if strings.Contains(err.Error(), "locked") {
+					transactionError = err
+					continue
+				}
+				transactionError = err
+				break // Permanent error, don't retry
+			}
+
+			// Transaction was successful
+			transactionError = nil
+			break // Exit retry loop on success
+		}
+
+		// Check if all retries failed
+		if transactionError != nil {
+			log.Printf("Warning: all transaction attempts failed for ignore %s: %v", ignore.ID, transactionError)
+			failedDeletions++
 			continue
 		}
 
 		deletedIgnores++
-		log.Printf("Successfully deleted ignore %s", ignoreID)
+		log.Printf("Successfully deleted ignore %s", ignore.ID)
 	}
 
 	log.Printf("Cleanup summary:")
@@ -90,7 +169,7 @@ func (c *CleanupCommand) Execute() error {
 	log.Printf("  Ignores successfully deleted: %d", deletedIgnores)
 	log.Printf("  Ignores failed to delete: %d", failedDeletions)
 
-	// Count progress
+	// Count progress (outside of transaction to avoid deadlock)
 	var totalCount, migratedCount, deletedCount int
 
 	countResult := c.db.QueryRow("SELECT COUNT(*) FROM ignores WHERE org_id = ?", c.orgID)

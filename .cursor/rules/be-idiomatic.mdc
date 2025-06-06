@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+When writing code, be as idiomatic as possible. Write comments and appropriate abstractions. Make use of helper functions and do not repeat code unless it helps substantially with readability.

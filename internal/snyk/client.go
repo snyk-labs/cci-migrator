@@ -708,7 +708,7 @@ func (c *Client) DeleteIgnore(orgID, projectID, ignoreID string) error {
 		c.debugResponse(resp)
 	}
 
-	if resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
 	}
 

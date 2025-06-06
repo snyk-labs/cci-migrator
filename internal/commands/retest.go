@@ -51,24 +51,42 @@ func (c *RetestCommand) Execute() error {
 	if !ok {
 		return fmt.Errorf("unexpected query result type")
 	}
-	defer rows.Close()
 
-	var totalProjects, successfulRetests, failedRetests int
+	// Collect all project data first to avoid deadlock
+	type projectData struct {
+		ID         string
+		Name       string
+		TargetJSON string
+	}
 
+	var projects []projectData
 	for rows.Next() {
 		var projectID, projectName, targetJSON string
 		err := rows.Scan(&projectID, &projectName, &targetJSON)
 		if err != nil {
+			rows.Close()
 			return fmt.Errorf("failed to scan project: %w", err)
 		}
 
-		totalProjects++
-		log.Printf("Retesting project %d: %s (%s)", totalProjects, projectName, projectID)
+		projects = append(projects, projectData{
+			ID:         projectID,
+			Name:       projectName,
+			TargetJSON: targetJSON,
+		})
+	}
+	rows.Close() // Close the result set before processing
+
+	var totalProjects, successfulRetests, failedRetests int
+	totalProjects = len(projects)
+
+	// Now process the collected projects
+	for i, proj := range projects {
+		log.Printf("Retesting project %d/%d: %s (%s)", i+1, totalProjects, proj.Name, proj.ID)
 
 		// Parse target information
 		var target snyk.Target
-		if err := json.Unmarshal([]byte(targetJSON), &target); err != nil {
-			log.Printf("Warning: failed to parse target information for project %s: %v", projectID, err)
+		if err := json.Unmarshal([]byte(proj.TargetJSON), &target); err != nil {
+			log.Printf("Warning: failed to parse target information for project %s: %v", proj.ID, err)
 			failedRetests++
 			continue
 		}
@@ -76,17 +94,17 @@ func (c *RetestCommand) Execute() error {
 		// If the target information is empty, fetch it from the API and update the database
 		if target.Name == "" && target.URL == "" && target.Owner == "" && target.Repo == "" && target.Branch == "" && target.Origin == "" && target.Source == "" {
 			// We don't have the target information yet; fetch the target ID via projects API
-			projects, err := c.client.GetProjects(c.orgID)
+			apiProjects, err := c.client.GetProjects(c.orgID)
 			if err != nil {
-				log.Printf("Warning: failed to fetch projects to determine target_id for project %s: %v", projectID, err)
+				log.Printf("Warning: failed to fetch projects to determine target_id for project %s: %v", proj.ID, err)
 				failedRetests++
 				continue
 			}
 
 			var targetID string
 			var targetReference string
-			for _, p := range projects {
-				if p.ID == projectID {
+			for _, p := range apiProjects {
+				if p.ID == proj.ID {
 					targetID = p.Target.ID
 					targetReference = p.TargetReference
 					break
@@ -94,14 +112,14 @@ func (c *RetestCommand) Execute() error {
 			}
 
 			if targetID == "" {
-				log.Printf("Warning: could not determine target_id for project %s", projectID)
+				log.Printf("Warning: could not determine target_id for project %s", proj.ID)
 				failedRetests++
 				continue
 			}
 
 			apiTarget, err := c.client.GetProjectTarget(c.orgID, targetID)
 			if err != nil {
-				log.Printf("Warning: failed to fetch target information from API for project %s: %v", projectID, err)
+				log.Printf("Warning: failed to fetch target information from API for project %s: %v", proj.ID, err)
 				failedRetests++
 				continue
 			}
@@ -119,16 +137,16 @@ func (c *RetestCommand) Execute() error {
 				UPDATE projects
 				SET target_information = ?
 				WHERE id = ?
-			`, string(targetBytes), projectID)
+			`, string(targetBytes), proj.ID)
 			if err != nil {
-				log.Printf("Warning: failed to update target information for project %s: %v", projectID, err)
+				log.Printf("Warning: failed to update target information for project %s: %v", proj.ID, err)
 			}
 		}
 
 		// Call Import API to retest
 		err = c.client.RetestProject(c.orgID, &target)
 		if err != nil {
-			log.Printf("Warning: failed to retest project %s: %v", projectID, err)
+			log.Printf("Warning: failed to retest project %s: %v", proj.ID, err)
 			failedRetests++
 			continue
 		}
@@ -139,14 +157,14 @@ func (c *RetestCommand) Execute() error {
 			UPDATE projects
 			SET retested_at = ?
 			WHERE id = ?
-		`, now, projectID)
+		`, now, proj.ID)
 		if err != nil {
 			log.Printf("Warning: failed to mark project as retested: %v", err)
 			continue
 		}
 
 		successfulRetests++
-		log.Printf("Successfully retested project %s", projectID)
+		log.Printf("Successfully retested project %s", proj.ID)
 	}
 
 	log.Printf("Retest summary:")
