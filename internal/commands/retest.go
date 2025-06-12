@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/z4ce/cci-migrator/internal/snyk"
@@ -172,6 +173,13 @@ func (c *RetestCommand) Execute() error {
 		err = c.client.RetestProject(c.orgID, &target)
 		if err != nil {
 			log.Printf("Warning: failed to retest project %s: %v", proj.ID, err)
+			// Log additional context for debugging
+			if strings.Contains(err.Error(), "failed to get integration information") {
+				log.Printf("Debug: Integration ID was %s for project %s", target.IntegrationID, proj.ID)
+			}
+			if strings.Contains(err.Error(), "failed to create import payload") {
+				log.Printf("Debug: Unsupported integration type for project %s. Consider checking the integration configuration.", proj.ID)
+			}
 			failedRetests++
 			continue
 		}

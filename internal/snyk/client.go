@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -626,6 +627,57 @@ func (c *Client) GetProjectTarget(orgID, targetID string) (*Target, error) {
 	return tgt, nil
 }
 
+// Integration represents a Snyk integration from the REST API
+type Integration struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Attributes struct {
+		Name            string `json:"name"`
+		IntegrationType string `json:"integration_type"`
+	} `json:"attributes"`
+}
+
+// IntegrationResponse represents the JSON:API response for a single integration
+type IntegrationResponse struct {
+	Data Integration `json:"data"`
+}
+
+// GetIntegration retrieves information about a specific integration
+func (c *Client) GetIntegration(orgID, integrationID string) (*Integration, error) {
+	url := fmt.Sprintf("%s/orgs/%s/integrations/%s", c.RestBaseURL, orgID, integrationID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "token "+c.Token)
+	req.Header.Set("Accept", "application/vnd.api+json")
+	c.debugRequest(req, nil)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if c.Debug {
+		c.debugResponse(resp)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
+	}
+
+	var integrationResp IntegrationResponse
+	if err := json.NewDecoder(resp.Body).Decode(&integrationResp); err != nil {
+		return nil, fmt.Errorf("failed to decode integration response: %w", err)
+	}
+
+	integration := &integrationResp.Data
+	return integration, nil
+}
+
 // RetestProject initiates a retest for a given target via its integration import endpoint
 func (c *Client) RetestProject(orgID string, target *Target) error {
 	// The import endpoint must be called on the integration that owns the target.
@@ -634,25 +686,18 @@ func (c *Client) RetestProject(orgID string, target *Target) error {
 		return fmt.Errorf("target missing integration_id – cannot trigger import")
 	}
 
+	// Get integration information to determine the correct payload format
+	integration, err := c.GetIntegration(orgID, integrationID)
+	if err != nil {
+		return fmt.Errorf("failed to get integration information: %w", err)
+	}
+
 	url := fmt.Sprintf("%s/org/%s/integrations/%s/import", c.V1BaseURL, orgID, integrationID)
 
-	// Create simplified import payload with only the necessary fields
-	type SimpleTarget struct {
-		Owner  string `json:"owner"`
-		Name   string `json:"name"`
-		Branch string `json:"branch"`
-	}
-
-	type ImportPayload struct {
-		Target SimpleTarget `json:"target"`
-	}
-
-	payload := ImportPayload{
-		Target: SimpleTarget{
-			Owner:  target.Owner,
-			Name:   target.Repo,
-			Branch: target.Branch,
-		},
+	// Create appropriate import payload based on integration type
+	payload, err := c.createImportPayload(integration.Attributes.IntegrationType, target)
+	if err != nil {
+		return fmt.Errorf("failed to create import payload: %w", err)
 	}
 
 	body, err := json.Marshal(payload)
@@ -684,6 +729,222 @@ func (c *Client) RetestProject(orgID string, target *Target) error {
 	}
 
 	return nil
+}
+
+// createImportPayload creates the appropriate payload structure based on integration type
+func (c *Client) createImportPayload(integrationType string, target *Target) (interface{}, error) {
+	switch integrationType {
+	case "github", "github-enterprise":
+		return c.createGitHubImportPayload(target), nil
+	case "bitbucket-cloud", "bitbucket-cloud-app":
+		return c.createBitbucketCloudImportPayload(target), nil
+	case "bitbucket-server":
+		return c.createBitbucketServerImportPayload(target), nil
+	case "gitlab", "gitlab-server", "gitlab-on-premise":
+		return c.createGitLabImportPayload(target), nil
+	case "azure-repos", "azure-repos-tfs", "azure-devops":
+		return c.createAzureReposImportPayload(target), nil
+	default:
+		// Fall back to the simple format for unknown integration types
+		return c.createDefaultImportPayload(target), nil
+	}
+}
+
+// createGitHubImportPayload creates the payload for GitHub and GitHub Enterprise
+func (c *Client) createGitHubImportPayload(target *Target) interface{} {
+	type GitHubTarget struct {
+		Owner  string `json:"owner"`
+		Name   string `json:"name"`
+		Branch string `json:"branch,omitempty"`
+	}
+
+	type GitHubImportPayload struct {
+		Target GitHubTarget `json:"target"`
+		Files  []struct {
+			Path string `json:"path"`
+		} `json:"files,omitempty"`
+	}
+
+	return GitHubImportPayload{
+		Target: GitHubTarget{
+			Owner:  target.Owner,
+			Name:   target.Repo,
+			Branch: target.Branch,
+		},
+	}
+}
+
+// createBitbucketCloudImportPayload creates the payload for Bitbucket Cloud
+func (c *Client) createBitbucketCloudImportPayload(target *Target) interface{} {
+	type BitbucketCloudTarget struct {
+		Owner    string `json:"owner"`
+		Name     string `json:"name"`
+		Branch   string `json:"branch,omitempty"`
+		RepoUUID string `json:"repo_uuid,omitempty"`
+	}
+
+	type BitbucketCloudImportPayload struct {
+		Target BitbucketCloudTarget `json:"target"`
+		Files  []struct {
+			Path string `json:"path"`
+		} `json:"files,omitempty"`
+	}
+
+	return BitbucketCloudImportPayload{
+		Target: BitbucketCloudTarget{
+			Owner:  target.Owner,
+			Name:   target.Repo,
+			Branch: target.Branch,
+		},
+	}
+}
+
+// createBitbucketServerImportPayload creates the payload for Bitbucket Server
+func (c *Client) createBitbucketServerImportPayload(target *Target) interface{} {
+	type BitbucketServerTarget struct {
+		ProjectKey string `json:"project_key"`
+		Name       string `json:"name"`
+		Branch     string `json:"branch,omitempty"`
+	}
+
+	type BitbucketServerImportPayload struct {
+		Target BitbucketServerTarget `json:"target"`
+		Files  []struct {
+			Path string `json:"path"`
+		} `json:"files,omitempty"`
+	}
+
+	// For Bitbucket Server, the project key is typically derived from the owner
+	// or could be stored in the target's options field
+	projectKey := target.Owner
+	if target.Options != nil {
+		if pk, ok := target.Options["project_key"].(string); ok && pk != "" {
+			projectKey = pk
+		}
+	}
+
+	return BitbucketServerImportPayload{
+		Target: BitbucketServerTarget{
+			ProjectKey: projectKey,
+			Name:       target.Repo,
+			Branch:     target.Branch,
+		},
+	}
+}
+
+// createGitLabImportPayload creates the payload for GitLab
+func (c *Client) createGitLabImportPayload(target *Target) interface{} {
+	type GitLabTarget struct {
+		Owner     string `json:"owner"`
+		Name      string `json:"name"`
+		Branch    string `json:"branch,omitempty"`
+		ProjectID int    `json:"project_id,omitempty"`
+		Namespace string `json:"namespace,omitempty"`
+	}
+
+	type GitLabImportPayload struct {
+		Target GitLabTarget `json:"target"`
+		Files  []struct {
+			Path string `json:"path"`
+		} `json:"files,omitempty"`
+	}
+
+	gitlabTarget := GitLabTarget{
+		Owner:  target.Owner,
+		Name:   target.Repo,
+		Branch: target.Branch,
+	}
+
+	// GitLab-specific configuration from target options
+	if target.Options != nil {
+		if projectID, ok := target.Options["project_id"].(int); ok && projectID > 0 {
+			gitlabTarget.ProjectID = projectID
+		} else if projectIDStr, ok := target.Options["project_id"].(string); ok && projectIDStr != "" {
+			// Try to parse string to int for project_id
+			if pid, err := strconv.Atoi(projectIDStr); err == nil {
+				gitlabTarget.ProjectID = pid
+			}
+		}
+
+		if namespace, ok := target.Options["namespace"].(string); ok && namespace != "" {
+			gitlabTarget.Namespace = namespace
+		}
+	}
+
+	// If no namespace is specified, use the owner as namespace
+	if gitlabTarget.Namespace == "" {
+		gitlabTarget.Namespace = target.Owner
+	}
+
+	return GitLabImportPayload{
+		Target: gitlabTarget,
+	}
+}
+
+// createAzureReposImportPayload creates the payload for Azure Repos
+func (c *Client) createAzureReposImportPayload(target *Target) interface{} {
+	type AzureReposTarget struct {
+		Owner        string `json:"owner"`
+		Name         string `json:"name"`
+		Branch       string `json:"branch,omitempty"`
+		Project      string `json:"project,omitempty"`
+		Organization string `json:"organization,omitempty"`
+	}
+
+	type AzureReposImportPayload struct {
+		Target AzureReposTarget `json:"target"`
+		Files  []struct {
+			Path string `json:"path"`
+		} `json:"files,omitempty"`
+	}
+
+	azureTarget := AzureReposTarget{
+		Owner:  target.Owner,
+		Name:   target.Repo,
+		Branch: target.Branch,
+	}
+
+	// For Azure Repos, project and organization might be stored in options
+	if target.Options != nil {
+		if project, ok := target.Options["project"].(string); ok && project != "" {
+			azureTarget.Project = project
+		} else {
+			// Default to owner if no project specified
+			azureTarget.Project = target.Owner
+		}
+
+		if org, ok := target.Options["organization"].(string); ok && org != "" {
+			azureTarget.Organization = org
+		}
+	} else {
+		// Default to owner if no options
+		azureTarget.Project = target.Owner
+	}
+
+	return AzureReposImportPayload{
+		Target: azureTarget,
+	}
+}
+
+// createDefaultImportPayload creates the simple payload for unknown integration types
+func (c *Client) createDefaultImportPayload(target *Target) interface{} {
+	type SimpleTarget struct {
+		Owner  string `json:"owner"`
+		Name   string `json:"name"`
+		Branch string `json:"branch,omitempty"`
+	}
+
+	type ImportPayload struct {
+		Target SimpleTarget `json:"target"`
+	}
+
+	return ImportPayload{
+		Target: SimpleTarget{
+			Owner:  target.Owner,
+			Name:   target.Repo,
+			Branch: target.Branch,
+		},
+	}
 }
 
 // DeleteIgnore deletes an ignore

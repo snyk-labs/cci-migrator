@@ -340,69 +340,507 @@ var _ = Describe("Snyk Client", func() {
 	})
 
 	Describe("RetestProject", func() {
-		It("should send simplified target payload with only owner, name, and branch", func() {
-			var requestBody []byte
-			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				Expect(r.Method).To(Equal("POST"))
-				Expect(r.URL.Path).To(Equal("/org/test-org/integrations/test-integration-id/import"))
-				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
-				Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
+		var target *Target
 
-				// Read the request body
-				var err error
-				requestBody, err = io.ReadAll(r.Body)
-				Expect(err).NotTo(HaveOccurred())
-
-				w.WriteHeader(http.StatusAccepted)
-			})
-
-			target := &Target{
+		BeforeEach(func() {
+			target = &Target{
 				Owner:         "test-owner",
 				Repo:          "test-repo",
 				Branch:        "main",
 				IntegrationID: "test-integration-id",
-				// These fields should NOT be included in the simplified payload
-				URL:    "https://github.com/test-owner/test-repo",
-				Origin: "github",
-				Source: "github",
-				Name:   "full-target-name",
 			}
+		})
 
-			err := client.RetestProject("test-org", target)
-			Expect(err).NotTo(HaveOccurred())
+		Context("when integration type is GitHub", func() {
+			BeforeEach(func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/orgs/test-org/integrations/test-integration-id":
+						Expect(r.Method).To(Equal("GET"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
 
-			// Verify the request body contains only the simplified target
-			var payload map[string]interface{}
-			err = json.Unmarshal(requestBody, &payload)
-			Expect(err).NotTo(HaveOccurred())
+						response := IntegrationResponse{
+							Data: Integration{
+								ID:   "test-integration-id",
+								Type: "integration",
+								Attributes: struct {
+									Name            string `json:"name"`
+									IntegrationType string `json:"integration_type"`
+								}{
+									Name:            "GitHub",
+									IntegrationType: "github",
+								},
+							},
+						}
+						w.Header().Set("Content-Type", "application/vnd.api+json")
+						json.NewEncoder(w).Encode(response)
 
-			targetPayload, ok := payload["target"].(map[string]interface{})
-			Expect(ok).To(BeTrue(), "target should be present in payload")
+					case "/org/test-org/integrations/test-integration-id/import":
+						Expect(r.Method).To(Equal("POST"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
 
-			// Should only contain owner, name, and branch
-			Expect(targetPayload).To(HaveLen(3))
-			Expect(targetPayload["owner"]).To(Equal("test-owner"))
-			Expect(targetPayload["name"]).To(Equal("test-repo"))
-			Expect(targetPayload["branch"]).To(Equal("main"))
+						body, _ := io.ReadAll(r.Body)
+						var payload map[string]interface{}
+						json.Unmarshal(body, &payload)
 
-			// Should NOT contain these fields
-			Expect(targetPayload).NotTo(HaveKey("url"))
-			Expect(targetPayload).NotTo(HaveKey("origin"))
-			Expect(targetPayload).NotTo(HaveKey("source"))
-			Expect(targetPayload).NotTo(HaveKey("integration_id"))
+						targetPayload := payload["target"].(map[string]interface{})
+						Expect(targetPayload["owner"]).To(Equal("test-owner"))
+						Expect(targetPayload["name"]).To(Equal("test-repo"))
+						Expect(targetPayload["branch"]).To(Equal("main"))
+						Expect(targetPayload).NotTo(HaveKey("project_key"))
+
+						w.WriteHeader(http.StatusOK)
+
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
+			})
+
+			It("should create GitHub-specific payload and retest successfully", func() {
+				err := client.RetestProject("test-org", target)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("when integration type is Bitbucket Server", func() {
+			BeforeEach(func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/orgs/test-org/integrations/test-integration-id":
+						Expect(r.Method).To(Equal("GET"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+						response := IntegrationResponse{
+							Data: Integration{
+								ID:   "test-integration-id",
+								Type: "integration",
+								Attributes: struct {
+									Name            string `json:"name"`
+									IntegrationType string `json:"integration_type"`
+								}{
+									Name:            "Bitbucket Server",
+									IntegrationType: "bitbucket-server",
+								},
+							},
+						}
+						w.Header().Set("Content-Type", "application/vnd.api+json")
+						json.NewEncoder(w).Encode(response)
+
+					case "/org/test-org/integrations/test-integration-id/import":
+						Expect(r.Method).To(Equal("POST"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
+
+						body, _ := io.ReadAll(r.Body)
+						var payload map[string]interface{}
+						json.Unmarshal(body, &payload)
+
+						targetPayload := payload["target"].(map[string]interface{})
+						Expect(targetPayload["project_key"]).To(Equal("test-owner"))
+						Expect(targetPayload["name"]).To(Equal("test-repo"))
+						Expect(targetPayload["branch"]).To(Equal("main"))
+						Expect(targetPayload).NotTo(HaveKey("owner"))
+
+						w.WriteHeader(http.StatusOK)
+
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
+			})
+
+			It("should create Bitbucket Server-specific payload and retest successfully", func() {
+				err := client.RetestProject("test-org", target)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("should use custom project_key from target options", func() {
+				target.Options = map[string]interface{}{
+					"project_key": "CUSTOM_KEY",
+				}
+
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/orgs/test-org/integrations/test-integration-id":
+						response := IntegrationResponse{
+							Data: Integration{
+								ID:   "test-integration-id",
+								Type: "integration",
+								Attributes: struct {
+									Name            string `json:"name"`
+									IntegrationType string `json:"integration_type"`
+								}{
+									Name:            "Bitbucket Server",
+									IntegrationType: "bitbucket-server",
+								},
+							},
+						}
+						w.Header().Set("Content-Type", "application/vnd.api+json")
+						json.NewEncoder(w).Encode(response)
+
+					case "/org/test-org/integrations/test-integration-id/import":
+						body, _ := io.ReadAll(r.Body)
+						var payload map[string]interface{}
+						json.Unmarshal(body, &payload)
+
+						targetPayload := payload["target"].(map[string]interface{})
+						Expect(targetPayload["project_key"]).To(Equal("CUSTOM_KEY"))
+
+						w.WriteHeader(http.StatusOK)
+
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
+
+				err := client.RetestProject("test-org", target)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("when integration type is Bitbucket Cloud", func() {
+			BeforeEach(func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/orgs/test-org/integrations/test-integration-id":
+						Expect(r.Method).To(Equal("GET"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+						response := IntegrationResponse{
+							Data: Integration{
+								ID:   "test-integration-id",
+								Type: "integration",
+								Attributes: struct {
+									Name            string `json:"name"`
+									IntegrationType string `json:"integration_type"`
+								}{
+									Name:            "Bitbucket Cloud",
+									IntegrationType: "bitbucket-cloud",
+								},
+							},
+						}
+						w.Header().Set("Content-Type", "application/vnd.api+json")
+						json.NewEncoder(w).Encode(response)
+
+					case "/org/test-org/integrations/test-integration-id/import":
+						Expect(r.Method).To(Equal("POST"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
+
+						body, _ := io.ReadAll(r.Body)
+						var payload map[string]interface{}
+						json.Unmarshal(body, &payload)
+
+						targetPayload := payload["target"].(map[string]interface{})
+						Expect(targetPayload["owner"]).To(Equal("test-owner"))
+						Expect(targetPayload["name"]).To(Equal("test-repo"))
+						Expect(targetPayload["branch"]).To(Equal("main"))
+						Expect(targetPayload).NotTo(HaveKey("project_key"))
+
+						w.WriteHeader(http.StatusOK)
+
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
+			})
+
+			It("should create Bitbucket Cloud-specific payload and retest successfully", func() {
+				err := client.RetestProject("test-org", target)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("when integration type is GitLab", func() {
+			BeforeEach(func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/orgs/test-org/integrations/test-integration-id":
+						Expect(r.Method).To(Equal("GET"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+						response := IntegrationResponse{
+							Data: Integration{
+								ID:   "test-integration-id",
+								Type: "integration",
+								Attributes: struct {
+									Name            string `json:"name"`
+									IntegrationType string `json:"integration_type"`
+								}{
+									Name:            "GitLab Integration",
+									IntegrationType: "gitlab",
+								},
+							},
+						}
+						w.Header().Set("Content-Type", "application/vnd.api+json")
+						json.NewEncoder(w).Encode(response)
+
+					case "/org/test-org/integrations/test-integration-id/import":
+						Expect(r.Method).To(Equal("POST"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
+
+						var payload map[string]interface{}
+						err := json.NewDecoder(r.Body).Decode(&payload)
+						Expect(err).NotTo(HaveOccurred())
+
+						target := payload["target"].(map[string]interface{})
+						Expect(target["owner"]).To(Equal("test-owner"))
+						Expect(target["name"]).To(Equal("test-repo"))
+						Expect(target["branch"]).To(Equal("main"))
+						Expect(target["namespace"]).To(Equal("test-owner")) // Default namespace
+
+						w.WriteHeader(http.StatusCreated)
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
+			})
+
+			It("should create GitLab-specific payload and successfully retest", func() {
+				err := client.RetestProject("test-org", target)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			Context("with GitLab-specific options", func() {
+				BeforeEach(func() {
+					target.Options = map[string]interface{}{
+						"project_id": 12345,
+						"namespace":  "custom-namespace",
+					}
+
+					server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						switch r.URL.Path {
+						case "/orgs/test-org/integrations/test-integration-id":
+							response := IntegrationResponse{
+								Data: Integration{
+									ID:   "test-integration-id",
+									Type: "integration",
+									Attributes: struct {
+										Name            string `json:"name"`
+										IntegrationType string `json:"integration_type"`
+									}{
+										Name:            "GitLab Integration",
+										IntegrationType: "gitlab",
+									},
+								},
+							}
+							w.Header().Set("Content-Type", "application/vnd.api+json")
+							json.NewEncoder(w).Encode(response)
+
+						case "/org/test-org/integrations/test-integration-id/import":
+							var payload map[string]interface{}
+							err := json.NewDecoder(r.Body).Decode(&payload)
+							Expect(err).NotTo(HaveOccurred())
+
+							target := payload["target"].(map[string]interface{})
+							Expect(target["project_id"]).To(Equal(float64(12345))) // JSON numbers are float64
+							Expect(target["namespace"]).To(Equal("custom-namespace"))
+
+							w.WriteHeader(http.StatusCreated)
+						}
+					})
+				})
+
+				It("should include GitLab-specific fields in payload", func() {
+					err := client.RetestProject("test-org", target)
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
+		})
+
+		Context("when integration type is Azure Repos", func() {
+			BeforeEach(func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/orgs/test-org/integrations/test-integration-id":
+						Expect(r.Method).To(Equal("GET"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+						response := IntegrationResponse{
+							Data: Integration{
+								ID:   "test-integration-id",
+								Type: "integration",
+								Attributes: struct {
+									Name            string `json:"name"`
+									IntegrationType string `json:"integration_type"`
+								}{
+									Name:            "Azure Repos Integration",
+									IntegrationType: "azure-repos",
+								},
+							},
+						}
+						w.Header().Set("Content-Type", "application/vnd.api+json")
+						json.NewEncoder(w).Encode(response)
+
+					case "/org/test-org/integrations/test-integration-id/import":
+						Expect(r.Method).To(Equal("POST"))
+						Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+						Expect(r.Header.Get("Content-Type")).To(Equal("application/json"))
+
+						var payload map[string]interface{}
+						err := json.NewDecoder(r.Body).Decode(&payload)
+						Expect(err).NotTo(HaveOccurred())
+
+						target := payload["target"].(map[string]interface{})
+						Expect(target["owner"]).To(Equal("test-owner"))
+						Expect(target["name"]).To(Equal("test-repo"))
+						Expect(target["branch"]).To(Equal("main"))
+						Expect(target["project"]).To(Equal("test-owner")) // Default project
+
+						w.WriteHeader(http.StatusCreated)
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
+			})
+
+			It("should create Azure Repos-specific payload and successfully retest", func() {
+				err := client.RetestProject("test-org", target)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			Context("with Azure Repos-specific options", func() {
+				BeforeEach(func() {
+					target.Options = map[string]interface{}{
+						"project":      "custom-project",
+						"organization": "custom-org",
+					}
+
+					server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						switch r.URL.Path {
+						case "/orgs/test-org/integrations/test-integration-id":
+							response := IntegrationResponse{
+								Data: Integration{
+									ID:   "test-integration-id",
+									Type: "integration",
+									Attributes: struct {
+										Name            string `json:"name"`
+										IntegrationType string `json:"integration_type"`
+									}{
+										Name:            "Azure Repos Integration",
+										IntegrationType: "azure-devops",
+									},
+								},
+							}
+							w.Header().Set("Content-Type", "application/vnd.api+json")
+							json.NewEncoder(w).Encode(response)
+
+						case "/org/test-org/integrations/test-integration-id/import":
+							var payload map[string]interface{}
+							err := json.NewDecoder(r.Body).Decode(&payload)
+							Expect(err).NotTo(HaveOccurred())
+
+							target := payload["target"].(map[string]interface{})
+							Expect(target["project"]).To(Equal("custom-project"))
+							Expect(target["organization"]).To(Equal("custom-org"))
+
+							w.WriteHeader(http.StatusCreated)
+						}
+					})
+				})
+
+				It("should include Azure Repos-specific fields in payload", func() {
+					err := client.RetestProject("test-org", target)
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
+		})
+
+		Context("when integration type has variations", func() {
+			DescribeTable("should handle integration type variations",
+				func(integrationType string) {
+					server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						switch r.URL.Path {
+						case "/orgs/test-org/integrations/test-integration-id":
+							response := IntegrationResponse{
+								Data: Integration{
+									ID:   "test-integration-id",
+									Type: "integration",
+									Attributes: struct {
+										Name            string `json:"name"`
+										IntegrationType string `json:"integration_type"`
+									}{
+										Name:            "Test Integration",
+										IntegrationType: integrationType,
+									},
+								},
+							}
+							w.Header().Set("Content-Type", "application/vnd.api+json")
+							json.NewEncoder(w).Encode(response)
+
+						case "/org/test-org/integrations/test-integration-id/import":
+							w.WriteHeader(http.StatusCreated)
+						}
+					})
+
+					err := client.RetestProject("test-org", target)
+					Expect(err).NotTo(HaveOccurred())
+				},
+				Entry("GitLab Server", "gitlab-server"),
+				Entry("GitLab On-Premise", "gitlab-on-premise"),
+				Entry("Azure DevOps", "azure-devops"),
+				Entry("Azure Repos TFS", "azure-repos-tfs"),
+			)
 		})
 
 		It("should return error when integration_id is missing", func() {
-			target := &Target{
-				Owner:  "test-owner",
-				Repo:   "test-repo",
-				Branch: "main",
-				// IntegrationID is missing
-			}
-
+			target.IntegrationID = ""
 			err := client.RetestProject("test-org", target)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("target missing integration_id"))
+		})
+
+		It("should return error when integration API call fails", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/orgs/test-org/integrations/test-integration-id" {
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+
+			err := client.RetestProject("test-org", target)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to get integration information"))
+		})
+
+		It("should return error when import API call fails", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/orgs/test-org/integrations/test-integration-id":
+					response := IntegrationResponse{
+						Data: Integration{
+							ID:   "test-integration-id",
+							Type: "integration",
+							Attributes: struct {
+								Name            string `json:"name"`
+								IntegrationType string `json:"integration_type"`
+							}{
+								Name:            "GitHub",
+								IntegrationType: "github",
+							},
+						},
+					}
+					w.Header().Set("Content-Type", "application/vnd.api+json")
+					json.NewEncoder(w).Encode(response)
+
+				case "/org/test-org/integrations/test-integration-id/import":
+					w.WriteHeader(http.StatusBadRequest)
+
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+
+			err := client.RetestProject("test-org", target)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unexpected status code: 400"))
 		})
 	})
 
@@ -753,6 +1191,63 @@ var _ = Describe("Snyk Client", func() {
 		It("should delete a policy successfully", func() {
 			err := client.DeletePolicy("test-org", "test-policy-id-delete")
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Describe("GetIntegration", func() {
+		It("should retrieve integration information successfully", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/orgs/test-org/integrations/test-integration-id"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+				response := IntegrationResponse{
+					Data: Integration{
+						ID:   "test-integration-id",
+						Type: "integration",
+						Attributes: struct {
+							Name            string `json:"name"`
+							IntegrationType string `json:"integration_type"`
+						}{
+							Name:            "GitHub Enterprise",
+							IntegrationType: "github-enterprise",
+						},
+					},
+				}
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			integration, err := client.GetIntegration("test-org", "test-integration-id")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(integration).NotTo(BeNil())
+			Expect(integration.ID).To(Equal("test-integration-id"))
+			Expect(integration.Attributes.Name).To(Equal("GitHub Enterprise"))
+			Expect(integration.Attributes.IntegrationType).To(Equal("github-enterprise"))
+		})
+
+		It("should return error when integration not found", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+			})
+
+			integration, err := client.GetIntegration("test-org", "non-existent-id")
+			Expect(err).To(HaveOccurred())
+			Expect(integration).To(BeNil())
+			Expect(err.Error()).To(ContainSubstring("unexpected status code: 404"))
+		})
+
+		It("should return error when response cannot be decoded", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				w.Write([]byte("invalid json"))
+			})
+
+			integration, err := client.GetIntegration("test-org", "test-integration-id")
+			Expect(err).To(HaveOccurred())
+			Expect(integration).To(BeNil())
+			Expect(err.Error()).To(ContainSubstring("failed to decode integration response"))
 		})
 	})
 })
