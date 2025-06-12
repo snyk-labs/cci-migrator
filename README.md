@@ -9,8 +9,10 @@ CCI Migrator facilitates the complex process of preserving existing SAST ignores
 1. **Gather** - Collects all SAST ignores, issues, and projects from the Snyk API
 2. **Plan** - Resolves conflicts and plans the migration
 3. **Execute** - Creates new policies using the Policy API
-4. **Retest** - Retests projects to apply changes
+4. **Retest** - Retests projects to apply changes (automatically skips CLI projects which cannot be retested)
 5. **Cleanup** - Safely removes old ignores
+
+The tool automatically detects CLI projects (projects with origin "cli") and excludes them from the retest phase since they cannot be retested via the API.
 
 ## Building
 

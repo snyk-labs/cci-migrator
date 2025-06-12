@@ -93,6 +93,12 @@ func (c *GatherCommand) Execute() error {
 	for _, project := range projects {
 		log.Printf("Processing project: %s (%s)", project.Name, project.ID)
 
+		// Check if this is a CLI project (cannot be retested)
+		isCliProject := (project.Origin == "cli")
+		if isCliProject {
+			log.Printf("Detected CLI project: %s (origin: %s) - will be excluded from retesting", project.Name, project.Origin)
+		}
+
 		// Get and store target information using the target ID already provided in the project attributes
 		targetID := project.Target.ID
 		if targetID == "" {
@@ -123,6 +129,7 @@ func (c *GatherCommand) Execute() error {
 			OrgID:             c.orgID,
 			Name:              project.Name,
 			TargetInformation: string(targetInfo),
+			IsCliProject:      isCliProject,
 		}
 
 		if err := c.db.InsertProject(dbProject); err != nil {
@@ -130,7 +137,11 @@ func (c *GatherCommand) Execute() error {
 			continue
 		}
 
-		log.Printf("Successfully stored project %s with target information", project.ID)
+		if isCliProject {
+			log.Printf("Successfully stored CLI project %s (will not be retested)", project.ID)
+		} else {
+			log.Printf("Successfully stored project %s with target information", project.ID)
+		}
 	}
 
 	// Phase 2: Gather all SAST ignores

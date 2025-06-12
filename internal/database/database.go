@@ -114,7 +114,8 @@ func initSchema(db *sql.DB) error {
 		org_id TEXT,
 		name TEXT,
 		target_information TEXT,
-		retested_at TIMESTAMP
+		retested_at TIMESTAMP,
+		is_cli_project BOOLEAN DEFAULT 0
 	);
 
 	CREATE TABLE IF NOT EXISTS policies (
@@ -184,6 +185,7 @@ type Project struct {
 	Name              string     `json:"name"`
 	TargetInformation string     `json:"target_information"`
 	RetestedAt        *time.Time `json:"retested_at,omitempty"`
+	IsCliProject      bool       `json:"is_cli_project"`
 }
 
 // Policy represents a row in the policies table
@@ -253,16 +255,17 @@ func (db *DB) InsertProject(project *Project) error {
 	// can still rely on that value.
 	query := `
 		INSERT INTO projects (
-			id, org_id, name, target_information, retested_at
-		) VALUES (?, ?, ?, ?, ?)
+			id, org_id, name, target_information, retested_at, is_cli_project
+		) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			org_id = excluded.org_id,
-			target_information = excluded.target_information
+			target_information = excluded.target_information,
+			is_cli_project = excluded.is_cli_project
 	`
 
 	_, err := db.DB.Exec(query,
-		project.ID, project.OrgID, project.Name, project.TargetInformation, project.RetestedAt,
+		project.ID, project.OrgID, project.Name, project.TargetInformation, project.RetestedAt, project.IsCliProject,
 	)
 	return err
 }
@@ -363,7 +366,7 @@ func (db *DB) GetProjectsByOrgID(orgID string) ([]*Project, error) {
 	for rows.Next() {
 		project := &Project{}
 		err := rows.Scan(
-			&project.ID, &project.OrgID, &project.Name, &project.TargetInformation, &project.RetestedAt,
+			&project.ID, &project.OrgID, &project.Name, &project.TargetInformation, &project.RetestedAt, &project.IsCliProject,
 		)
 		if err != nil {
 			return nil, err

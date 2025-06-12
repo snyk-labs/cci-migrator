@@ -52,9 +52,11 @@ func (c *VerifyCommand) Execute() error {
 	}
 
 	// Count projects with missing target information
-	var missingTargetInfo int
+	var missingTargetInfo, cliProjects int
 	for _, project := range projects {
-		if project.TargetInformation == "" {
+		if project.IsCliProject {
+			cliProjects++
+		} else if project.TargetInformation == "" {
 			missingTargetInfo++
 		}
 	}
@@ -62,10 +64,12 @@ func (c *VerifyCommand) Execute() error {
 	// Print verification results
 	fmt.Printf("Verification Results for Organization: %s\n", c.orgID)
 	fmt.Printf("Total Projects: %d\n", len(projects))
+	fmt.Printf("CLI Projects (cannot be retested): %d\n", cliProjects)
+	fmt.Printf("Regular Projects: %d\n", len(projects)-cliProjects)
 	fmt.Printf("Total Issues: %d\n", len(issues))
 	fmt.Printf("Total Ignores: %d\n", len(ignores))
 	fmt.Printf("Ignores with Missing Asset Keys: %d\n", missingAssetKeys)
-	fmt.Printf("Projects with Missing Target Information: %d\n", missingTargetInfo)
+	fmt.Printf("Regular Projects with Missing Target Information: %d\n", missingTargetInfo)
 
 	// Check for collection metadata
 	var metadataCount int

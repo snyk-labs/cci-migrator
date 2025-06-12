@@ -37,4 +37,12 @@ debug/
 # Environment files
 .env
 .env.local
-*.env.local 
+*.env.local
+
+# Database files
+cci-migration.db-shm
+cci-migration.db-wal
+
+# Binary files
+cmd/cci-migrator/cci-migrator
+cci-migrator

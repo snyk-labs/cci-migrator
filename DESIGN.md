@@ -75,6 +75,7 @@ CREATE TABLE collection_metadata (
    - Iterate through all projects of type SAST
      - Pull down target information
      - Store project data
+     - Detect CLI projects (origin == "cli") and mark them as non-retestable
    - For each ignore, add asset key information using the issues table
    - Record collection metadata (timestamp, versions)
    - Create database backup point after collection
@@ -106,12 +107,10 @@ CREATE TABLE collection_metadata (
      - Mark policy as created in database
    - Note: Can be safely re-run from plan state
 
-### Phase 4: Retest Phase
-1. **Retest Projects**
-   - For each project with changes:
-     - Call V1 import API using stored target information
-     - Mark project as retested in database
-   - Track retest status for each project
+### Phase 4: Retest Implementation
+- [x] Implement project retest logic using import API
+- [x] Add retest status tracking
+- [x] Handle CLI projects (skip retesting as they cannot be retested via API)
 
 ### Phase 5: Clean Up Phase (Verifiable)
 1. **Delete Old Ignores (Idempotent)**
@@ -187,7 +186,7 @@ Global Options:
 ### Phase 4: Retest Implementation
 - [x] Implement project retest logic using import API
 - [x] Add retest status tracking
-- [x] Handle retest failures
+- [x] Handle CLI projects (skip retesting as they cannot be retested via API)
 
 ### Phase 5: Cleanup Logic
 - [x] Implement idempotent V1 ignore deletion

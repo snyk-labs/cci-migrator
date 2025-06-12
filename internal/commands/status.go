@@ -71,10 +71,15 @@ func (c *StatusCommand) Execute() error {
 		}
 	}
 
-	var retestedProjects int
+	var retestedProjects, cliProjects, regularProjects int
 	for _, project := range projects {
-		if project.RetestedAt != nil {
-			retestedProjects++
+		if project.IsCliProject {
+			cliProjects++
+		} else {
+			regularProjects++
+			if project.RetestedAt != nil {
+				retestedProjects++
+			}
 		}
 	}
 
@@ -107,6 +112,8 @@ func (c *StatusCommand) Execute() error {
 		fmt.Printf("  Not completed\n")
 	}
 	fmt.Printf("  Projects: %d\n", len(projects))
+	fmt.Printf("  CLI Projects (cannot be retested): %d\n", cliProjects)
+	fmt.Printf("  Regular Projects: %d\n", regularProjects)
 	fmt.Printf("  Issues: %d\n", len(issues))
 	fmt.Printf("  Ignores: %d\n", totalIgnores)
 
@@ -119,7 +126,7 @@ func (c *StatusCommand) Execute() error {
 	fmt.Printf("  Migrated Ignores: %d/%d (%.1f%%)\n", migratedIgnores, selectedIgnores, percentage(migratedIgnores, selectedIgnores))
 
 	fmt.Printf("\nRetest Phase:\n")
-	fmt.Printf("  Retested Projects: %d/%d (%.1f%%)\n", retestedProjects, len(projects), percentage(retestedProjects, len(projects)))
+	fmt.Printf("  Retested Projects: %d/%d (%.1f%%)\n", retestedProjects, regularProjects, percentage(retestedProjects, regularProjects))
 
 	fmt.Printf("\nCleanup Phase:\n")
 	fmt.Printf("  Deleted Ignores: %d/%d (%.1f%%)\n", deletedIgnores, selectedIgnores, percentage(deletedIgnores, selectedIgnores))
@@ -134,7 +141,7 @@ func (c *StatusCommand) Execute() error {
 		fmt.Println("PLANNING COMPLETE")
 	} else if migratedIgnores < selectedIgnores {
 		fmt.Println("EXECUTION IN PROGRESS")
-	} else if retestedProjects < len(projects) {
+	} else if retestedProjects < regularProjects {
 		fmt.Println("RETEST IN PROGRESS")
 	} else if deletedIgnores < selectedIgnores {
 		fmt.Println("CLEANUP IN PROGRESS")

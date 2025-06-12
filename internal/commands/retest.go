@@ -31,12 +31,37 @@ func NewRetestCommand(db DatabaseInterface, client ClientInterface, orgID string
 func (c *RetestCommand) Execute() error {
 	log.Printf("Starting retest for organization: %s", c.orgID)
 
-	// Get all projects with migrated ignores that haven't been retested
+	// First, get a count of CLI projects to show user what's being skipped
+	cliCountResult, err := c.db.Query(`
+		SELECT COUNT(DISTINCT p.id)
+		FROM projects p
+		JOIN ignores i ON p.id = i.project_id
+		WHERE p.org_id = ? AND i.migrated_at IS NOT NULL AND p.is_cli_project = 1
+	`, c.orgID)
+	if err != nil {
+		log.Printf("Warning: failed to count CLI projects: %v", err)
+	} else {
+		if cliRows, ok := cliCountResult.(interface {
+			Next() bool
+			Scan(dest ...interface{}) error
+			Close() error
+		}); ok {
+			defer cliRows.Close()
+			if cliRows.Next() {
+				var cliCount int
+				if err := cliRows.Scan(&cliCount); err == nil && cliCount > 0 {
+					log.Printf("Skipping %d CLI projects (cannot be retested via API)", cliCount)
+				}
+			}
+		}
+	}
+
+	// Get all projects with migrated ignores that haven't been retested (excluding CLI projects)
 	queryResult, err := c.db.Query(`
 		SELECT DISTINCT p.id, p.name, p.target_information
 		FROM projects p
 		JOIN ignores i ON p.id = i.project_id
-		WHERE p.org_id = ? AND i.migrated_at IS NOT NULL AND p.retested_at IS NULL
+		WHERE p.org_id = ? AND i.migrated_at IS NOT NULL AND p.retested_at IS NULL AND p.is_cli_project = 0
 	`, c.orgID)
 	if err != nil {
 		return fmt.Errorf("failed to get projects to retest: %w", err)

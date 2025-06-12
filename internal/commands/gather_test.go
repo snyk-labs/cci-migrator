@@ -34,9 +34,10 @@ var _ = Describe("Gather Command", func() {
 				Expect(orgID).To(Equal("test-org-id"))
 				return []snyk.Project{
 					{
-						ID:   "test-project-id",
-						Name: "Test Project",
-						Type: "sast",
+						ID:     "test-project-id",
+						Name:   "Test Project",
+						Type:   "sast",
+						Origin: "github",
 						Target: snyk.Target{
 							ID: "test-target-id",
 						},
@@ -372,6 +373,7 @@ var _ = Describe("Gather Command", func() {
 			Expect(project.ID).To(Equal("test-project-id"))
 			Expect(project.OrgID).To(Equal("test-org-id"))
 			Expect(project.Name).To(Equal("Test Project"))
+			Expect(project.IsCliProject).To(BeFalse(), "GitHub origin project should not be marked as CLI project")
 
 			// Verify target was stored
 			var target snyk.Target
@@ -429,6 +431,65 @@ var _ = Describe("Gather Command", func() {
 			err := cmd.Execute()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get projects: API error"))
+		})
+
+		It("should correctly identify CLI projects", func() {
+			// Set up mock client responses for CLI project
+			mockClient.GetProjectsFunc = func(orgID string) ([]snyk.Project, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				return []snyk.Project{
+					{
+						ID:     "cli-project-id",
+						Name:   "CLI Project",
+						Type:   "sast",
+						Origin: "cli", // This is a CLI project
+						Target: snyk.Target{
+							ID: "cli-target-id",
+						},
+					},
+				}, nil
+			}
+
+			mockClient.GetProjectTargetFunc = func(orgID, targetID string) (*snyk.Target, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(targetID).To(Equal("cli-target-id"))
+				return &snyk.Target{
+					Name:   "cli-repo",
+					Branch: "main",
+				}, nil
+			}
+
+			mockClient.GetIgnoresFunc = func(orgID, projectID string) ([]snyk.Ignore, error) {
+				return []snyk.Ignore{}, nil // No ignores for simplicity
+			}
+
+			mockClient.GetSASTIssuesFunc = func(orgID, projectID string) ([]snyk.SASTIssue, error) {
+				return []snyk.SASTIssue{}, nil // No issues for simplicity
+			}
+
+			// Set up mock QueryRow and Query results
+			mockDB.QueryRowFunc = func(query string, args ...interface{}) *sql.Row {
+				db, _ := sql.Open("sqlite3", ":memory:")
+				defer db.Close()
+				db.Exec("CREATE TABLE collection_metadata (count INTEGER)")
+				db.Exec("INSERT INTO collection_metadata VALUES (1)")
+				return db.QueryRow("SELECT 1")
+			}
+
+			mockDB.QueryFunc = func(query string, args ...interface{}) (interface{}, error) {
+				return &MockRows{}, nil
+			}
+
+			// Execute the command
+			err := cmd.Execute()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify that the CLI project was stored correctly
+			Expect(mockDB.InsertProjectCalls).To(HaveLen(1))
+			project := mockDB.InsertProjectCalls[0]
+			Expect(project.ID).To(Equal("cli-project-id"))
+			Expect(project.Name).To(Equal("CLI Project"))
+			Expect(project.IsCliProject).To(BeTrue(), "CLI origin project should be marked as CLI project")
 		})
 	})
 })
