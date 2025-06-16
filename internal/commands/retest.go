@@ -33,6 +33,9 @@ func (c *RetestCommand) Execute() error {
 	log.Printf("Starting retest for organization: %s", c.orgID)
 
 	// First, get a count of CLI projects to show user what's being skipped
+	if c.debug {
+		log.Printf("Debug: Counting CLI projects...")
+	}
 	cliCountResult, err := c.db.Query(`
 		SELECT COUNT(DISTINCT p.id)
 		FROM projects p
@@ -57,6 +60,9 @@ func (c *RetestCommand) Execute() error {
 		}
 	}
 
+	if c.debug {
+		log.Printf("Debug: Querying for projects to retest...")
+	}
 	// Get all projects with migrated ignores that haven't been retested (excluding CLI projects)
 	queryResult, err := c.db.Query(`
 		SELECT DISTINCT p.id, p.name, p.target_information
@@ -68,6 +74,9 @@ func (c *RetestCommand) Execute() error {
 		return fmt.Errorf("failed to get projects to retest: %w", err)
 	}
 
+	if c.debug {
+		log.Printf("Debug: Converting query result to rows...")
+	}
 	// Type assertion for rows
 	rows, ok := queryResult.(interface {
 		Next() bool
@@ -78,6 +87,9 @@ func (c *RetestCommand) Execute() error {
 		return fmt.Errorf("unexpected query result type")
 	}
 
+	if c.debug {
+		log.Printf("Debug: Collecting project data...")
+	}
 	// Collect all project data first to avoid deadlock
 	type projectData struct {
 		ID         string
@@ -102,6 +114,9 @@ func (c *RetestCommand) Execute() error {
 	}
 	rows.Close() // Close the result set before processing
 
+	if c.debug {
+		log.Printf("Debug: Found %d projects to retest", len(projects))
+	}
 	var totalProjects, successfulRetests, failedRetests int
 	totalProjects = len(projects)
 

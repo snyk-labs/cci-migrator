@@ -17,13 +17,15 @@ type DB struct {
 func New(dbPath string) (*DB, error) {
 	// Add busy_timeout=10000 to wait up to 10 seconds when database is locked
 	// This is the most important parameter for preventing "database is locked" errors
-	sqlDB, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=10000")
+	sqlDB, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=10000&_journal=WAL&_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
 
-	// Limit connections to prevent concurrent write operations
-	sqlDB.SetMaxOpenConns(1)
+	// Allow multiple connections for better concurrency
+	sqlDB.SetMaxOpenConns(10)
+	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxLifetime(time.Minute * 5)
 
 	db := &DB{sqlDB}
 
@@ -210,6 +212,18 @@ func (db *DB) InsertIgnore(ignore *Ignore) error {
 			deleted_at, migrated_at, policy_id, internal_policy_id,
 			selected_for_migration
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			issue_id = excluded.issue_id,
+			org_id = excluded.org_id,
+			project_id = excluded.project_id,
+			reason = excluded.reason,
+			ignore_type = excluded.ignore_type,
+			created_at = excluded.created_at,
+			expires_at = excluded.expires_at,
+			asset_key = excluded.asset_key,
+			original_state = excluded.original_state
+			-- Note: We don't update deleted_at, migrated_at, policy_id, internal_policy_id, 
+			-- or selected_for_migration to preserve any migration state changes
 	`
 
 	fmt.Printf("Inserting ignore into database: ID=%s, IssueID=%s, OrgID=%s, ProjectID=%s\n",
@@ -240,6 +254,12 @@ func (db *DB) InsertIssue(issue *Issue) error {
 		INSERT INTO issues (
 			id, org_id, project_id, asset_key, project_key, original_state
 		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			org_id = excluded.org_id,
+			project_id = excluded.project_id,
+			asset_key = excluded.asset_key,
+			project_key = excluded.project_key,
+			original_state = excluded.original_state
 	`
 
 	_, err := db.DB.Exec(query,
@@ -277,6 +297,15 @@ func (db *DB) InsertPolicy(policy *Policy) error {
 			internal_id, org_id, asset_key, policy_type, reason,
 			expires_at, source_ignores, external_id, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(internal_id) DO UPDATE SET
+			org_id = excluded.org_id,
+			asset_key = excluded.asset_key,
+			policy_type = excluded.policy_type,
+			reason = excluded.reason,
+			expires_at = excluded.expires_at,
+			source_ignores = excluded.source_ignores
+			-- Note: We don't update external_id or created_at to preserve 
+			-- any state from successful policy creation via API
 	`
 
 	_, err := db.DB.Exec(query,
@@ -290,8 +319,12 @@ func (db *DB) InsertPolicy(policy *Policy) error {
 func (db *DB) UpdateCollectionMetadata(completedAt time.Time, collectionVersion, apiVersion string) error {
 	query := `
 		INSERT INTO collection_metadata (
-			collection_completed_at, collection_version, api_version
-		) VALUES (?, ?, ?)
+			id, collection_completed_at, collection_version, api_version
+		) VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			collection_completed_at = excluded.collection_completed_at,
+			collection_version = excluded.collection_version,
+			api_version = excluded.api_version
 	`
 
 	_, err := db.DB.Exec(query, completedAt, collectionVersion, apiVersion)

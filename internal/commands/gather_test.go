@@ -491,6 +491,378 @@ var _ = Describe("Gather Command", func() {
 			Expect(project.Name).To(Equal("CLI Project"))
 			Expect(project.IsCliProject).To(BeTrue(), "CLI origin project should be marked as CLI project")
 		})
+
+		It("should be idempotent and allow running gather multiple times", func() {
+			// Set up mock client responses that will be called twice
+			mockClient.GetProjectsFunc = func(orgID string) ([]snyk.Project, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				return []snyk.Project{
+					{
+						ID:     "test-project-id",
+						Name:   "Test Project",
+						Type:   "sast",
+						Origin: "github",
+						Target: snyk.Target{
+							ID: "test-target-id",
+						},
+					},
+				}, nil
+			}
+
+			mockClient.GetProjectTargetFunc = func(orgID, targetID string) (*snyk.Target, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(targetID).To(Equal("test-target-id"))
+				return &snyk.Target{
+					Name:   "test-repo",
+					Branch: "main",
+				}, nil
+			}
+
+			mockClient.GetIgnoresFunc = func(orgID, projectID string) ([]snyk.Ignore, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(projectID).To(Equal("test-project-id"))
+				return []snyk.Ignore{
+					{
+						ID:         "test-ignore-id",
+						Reason:     "test reason",
+						ReasonType: "wont-fix",
+						CreatedAt:  time.Now(),
+						Path: []struct {
+							Module string `json:"module"`
+						}{
+							{Module: "test-module"},
+						},
+						IgnoredBy: snyk.User{
+							ID:    "test-user-id",
+							Name:  "Test User",
+							Email: "test@example.com",
+						},
+						DisregardIfFixable: false,
+						IgnoreScope:        "project",
+					},
+				}, nil
+			}
+
+			mockClient.GetSASTIssuesFunc = func(orgID, projectID string) ([]snyk.SASTIssue, error) {
+				Expect(orgID).To(Equal("test-org-id"))
+				Expect(projectID).To(Equal(""))
+				return []snyk.SASTIssue{
+					{
+						ID:   "test-ignore-id",
+						Type: "issue",
+						Attributes: struct {
+							Classes []struct {
+								ID     string `json:"id"`
+								Source string `json:"source"`
+								Type   string `json:"type"`
+							} `json:"classes"`
+							Coordinates []struct {
+								IsFixableManually bool `json:"is_fixable_manually"`
+								IsFixableSnyk     bool `json:"is_fixable_snyk"`
+								IsFixableUpstream bool `json:"is_fixable_upstream"`
+								Representations   []struct {
+									SourceLocation struct {
+										CommitID string `json:"commit_id"`
+										File     string `json:"file"`
+										Region   struct {
+											End struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"end"`
+											Start struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"start"`
+										} `json:"region"`
+									} `json:"sourceLocation"`
+								} `json:"representations"`
+							} `json:"coordinates"`
+							CreatedAt              time.Time `json:"created_at"`
+							Description            string    `json:"description"`
+							EffectiveSeverityLevel string    `json:"effective_severity_level"`
+							Ignored                bool      `json:"ignored"`
+							Key                    string    `json:"key"`
+							KeyAsset               string    `json:"key_asset"`
+							Problems               []struct {
+								ID        string    `json:"id"`
+								Source    string    `json:"source"`
+								Type      string    `json:"type"`
+								UpdatedAt time.Time `json:"updated_at"`
+							} `json:"problems"`
+							Risk struct {
+								Factors []any `json:"factors"`
+								Score   struct {
+									Model string `json:"model"`
+									Value int    `json:"value"`
+								} `json:"score"`
+							} `json:"risk"`
+							Status    string    `json:"status"`
+							Title     string    `json:"title"`
+							Type      string    `json:"type"`
+							UpdatedAt time.Time `json:"updated_at"`
+						}{
+							KeyAsset:               "test-asset-key",
+							Ignored:                true,
+							CreatedAt:              time.Now(),
+							Description:            "Test Issue",
+							EffectiveSeverityLevel: "medium",
+							Key:                    "test-key",
+							Status:                 "open",
+							Title:                  "Test Issue Title",
+							UpdatedAt:              time.Now(),
+							Classes: []struct {
+								ID     string `json:"id"`
+								Source string `json:"source"`
+								Type   string `json:"type"`
+							}{
+								{
+									ID:     "CWE-123",
+									Source: "CWE",
+									Type:   "weakness",
+								},
+							},
+							Coordinates: []struct {
+								IsFixableManually bool `json:"is_fixable_manually"`
+								IsFixableSnyk     bool `json:"is_fixable_snyk"`
+								IsFixableUpstream bool `json:"is_fixable_upstream"`
+								Representations   []struct {
+									SourceLocation struct {
+										CommitID string `json:"commit_id"`
+										File     string `json:"file"`
+										Region   struct {
+											End struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"end"`
+											Start struct {
+												Column int `json:"column"`
+												Line   int `json:"line"`
+											} `json:"start"`
+										} `json:"region"`
+									} `json:"sourceLocation"`
+								} `json:"representations"`
+							}{
+								{
+									IsFixableManually: false,
+									IsFixableSnyk:     false,
+									IsFixableUpstream: false,
+									Representations: []struct {
+										SourceLocation struct {
+											CommitID string `json:"commit_id"`
+											File     string `json:"file"`
+											Region   struct {
+												End struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												} `json:"end"`
+												Start struct {
+													Column int `json:"column"`
+													Line   int `json:"line"`
+												} `json:"start"`
+											} `json:"region"`
+										} `json:"sourceLocation"`
+									}{
+										{
+											SourceLocation: struct {
+												CommitID string `json:"commit_id"`
+												File     string `json:"file"`
+												Region   struct {
+													End struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"end"`
+													Start struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"start"`
+												} `json:"region"`
+											}{
+												CommitID: "test-commit",
+												File:     "test.go",
+												Region: struct {
+													End struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"end"`
+													Start struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													} `json:"start"`
+												}{
+													End: struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													}{
+														Column: 20,
+														Line:   100,
+													},
+													Start: struct {
+														Column int `json:"column"`
+														Line   int `json:"line"`
+													}{
+														Column: 1,
+														Line:   100,
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+							Problems: []struct {
+								ID        string    `json:"id"`
+								Source    string    `json:"source"`
+								Type      string    `json:"type"`
+								UpdatedAt time.Time `json:"updated_at"`
+							}{
+								{
+									ID:        "test-problem-id",
+									Source:    "SNYK",
+									Type:      "vulnerability",
+									UpdatedAt: time.Now(),
+								},
+							},
+							Risk: struct {
+								Factors []any `json:"factors"`
+								Score   struct {
+									Model string `json:"model"`
+									Value int    `json:"value"`
+								} `json:"score"`
+							}{
+								Factors: []any{},
+								Score: struct {
+									Model string `json:"model"`
+									Value int    `json:"value"`
+								}{
+									Model: "v1",
+									Value: 363,
+								},
+							},
+						},
+						Relationships: struct {
+							Organization struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							} `json:"organization"`
+							ScanItem struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							} `json:"scan_item"`
+						}{
+							Organization: struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							}{
+								Data: struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								}{
+									ID:   "test-org-id",
+									Type: "organization",
+								},
+								Links: struct {
+									Related string `json:"related"`
+								}{
+									Related: "/orgs/test-org-id",
+								},
+							},
+							ScanItem: struct {
+								Data struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								} `json:"data"`
+								Links struct {
+									Related string `json:"related"`
+								} `json:"links"`
+							}{
+								Data: struct {
+									ID   string `json:"id"`
+									Type string `json:"type"`
+								}{
+									ID:   "test-project-id",
+									Type: "scan_item",
+								},
+								Links: struct {
+									Related string `json:"related"`
+								}{
+									Related: "/scan-items/test-project-id",
+								},
+							},
+						},
+					},
+				}, nil
+			}
+
+			// Set up mock QueryRow results
+			mockDB.QueryRowFunc = func(query string, args ...interface{}) *sql.Row {
+				// Create a mock DB connection to get a real sql.Row
+				db, _ := sql.Open("sqlite3", ":memory:")
+				defer db.Close()
+				db.Exec("CREATE TABLE collection_metadata (count INTEGER)")
+				db.Exec("INSERT INTO collection_metadata VALUES (1)")
+				return db.QueryRow("SELECT 1")
+			}
+
+			// Set up mock Query results for Print method
+			mockDB.QueryFunc = func(query string, args ...interface{}) (interface{}, error) {
+				return &MockRows{}, nil
+			}
+
+			// Execute the command the first time
+			err := cmd.Execute()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify first execution results
+			Expect(mockDB.InsertProjectCalls).To(HaveLen(1))
+			Expect(mockDB.InsertIgnoreCalls).To(HaveLen(1))
+			Expect(mockDB.InsertIssueCalls).To(HaveLen(1))
+			Expect(mockDB.UpdateCollectionMetadataCalls).To(HaveLen(1))
+
+			// Reset the call counters and execute the command a second time
+			mockDB.InsertProjectCalls = []*database.Project{}
+			mockDB.InsertIgnoreCalls = []*database.Ignore{}
+			mockDB.InsertIssueCalls = []*database.Issue{}
+			mockDB.UpdateCollectionMetadataCalls = []struct{}{}
+			mockDB.ExecCalls = []MockExecCall{}
+
+			// Execute the command the second time - this should not fail
+			err = cmd.Execute()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify second execution also worked (same data inserted again)
+			Expect(mockDB.InsertProjectCalls).To(HaveLen(1))
+			Expect(mockDB.InsertIgnoreCalls).To(HaveLen(1))
+			Expect(mockDB.InsertIssueCalls).To(HaveLen(1))
+			Expect(mockDB.UpdateCollectionMetadataCalls).To(HaveLen(1))
+
+			// Verify the data is still the same
+			project := mockDB.InsertProjectCalls[0]
+			Expect(project.ID).To(Equal("test-project-id"))
+			Expect(project.Name).To(Equal("Test Project"))
+
+			ignore := mockDB.InsertIgnoreCalls[0]
+			Expect(ignore.ID).To(Equal("test-ignore-id"))
+			Expect(ignore.Reason).To(Equal("test reason"))
+
+			issue := mockDB.InsertIssueCalls[0]
+			Expect(issue.ID).To(Equal("test-ignore-id"))
+			Expect(issue.AssetKey).To(Equal("test-asset-key"))
+		})
 	})
 })
 
