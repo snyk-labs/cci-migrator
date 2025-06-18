@@ -83,6 +83,24 @@ func (c *StatusCommand) Execute() error {
 		}
 	}
 
+	// Calculate projects that actually need retesting (only those with migrated ignores)
+	var projectsNeedingRetest int
+	projectsWithMigratedIgnores := make(map[string]bool)
+
+	// Find projects that have migrated ignores
+	for _, ignore := range ignores {
+		if ignore.MigratedAt != nil {
+			projectsWithMigratedIgnores[ignore.ProjectID] = true
+		}
+	}
+
+	// Count non-CLI projects that have migrated ignores
+	for _, project := range projects {
+		if !project.IsCliProject && projectsWithMigratedIgnores[project.ID] {
+			projectsNeedingRetest++
+		}
+	}
+
 	// Check for collection metadata
 	var collectionCompletedAt time.Time
 	var collectionVersion, apiVersion string
@@ -126,7 +144,7 @@ func (c *StatusCommand) Execute() error {
 	fmt.Printf("  Migrated Ignores: %d/%d (%.1f%%)\n", migratedIgnores, selectedIgnores, percentage(migratedIgnores, selectedIgnores))
 
 	fmt.Printf("\nRetest Phase:\n")
-	fmt.Printf("  Retested Projects: %d/%d (%.1f%%)\n", retestedProjects, regularProjects, percentage(retestedProjects, regularProjects))
+	fmt.Printf("  Retested Projects: %d/%d (%.1f%%)\n", retestedProjects, projectsNeedingRetest, percentage(retestedProjects, projectsNeedingRetest))
 
 	fmt.Printf("\nCleanup Phase:\n")
 	fmt.Printf("  Deleted Ignores: %d/%d (%.1f%%)\n", deletedIgnores, selectedIgnores, percentage(deletedIgnores, selectedIgnores))
@@ -141,7 +159,7 @@ func (c *StatusCommand) Execute() error {
 		fmt.Println("PLANNING COMPLETE")
 	} else if migratedIgnores < selectedIgnores {
 		fmt.Println("EXECUTION IN PROGRESS")
-	} else if retestedProjects < regularProjects {
+	} else if retestedProjects < projectsNeedingRetest {
 		fmt.Println("RETEST IN PROGRESS")
 	} else if deletedIgnores < selectedIgnores {
 		fmt.Println("CLEANUP IN PROGRESS")
