@@ -17,6 +17,7 @@ before:
 
 builds:
   - id: amd64
+    main: ./cmd/cci-migrator
     env:
       - CGO_ENABLED=1
     goos:
@@ -38,6 +39,7 @@ builds:
           - CXX=x86_64-w64-mingw32-g++
 
   - id: arm64
+    main: ./cmd/cci-migrator
     env:
       - CGO_ENABLED=1
     goos:
