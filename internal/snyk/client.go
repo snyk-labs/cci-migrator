@@ -829,7 +829,7 @@ func (c *Client) GetPolicies(orgID string, options map[string]string) ([]Policy,
 	url := fmt.Sprintf("%s/orgs/%s/policies?version=2024-10-15", c.RestBaseURL, orgID)
 
 	// Add query parameters from options
-	if options != nil && len(options) > 0 {
+	if len(options) > 0 {
 		query := ""
 		for key, value := range options {
 			if query == "" {
