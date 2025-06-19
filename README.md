@@ -35,10 +35,9 @@ chmod +x cci-migrator
 
 ### Windows
 
-```bash
-curl -LsSf https://github.com/z4ce/cci-migrator/releases/latest/download/cci-migrator_Windows_x86_64.zip -o cci-migrator.zip
-unzip cci-migrator.zip
-chmod +x cci-migrator.exe
+```powershell
+Invoke-WebRequest -Uri "https://github.com/z4ce/cci-migrator/releases/latest/download/cci-migrator_Windows_x86_64.zip" -OutFile "cci-migrator.zip"
+Expand-Archive -Path "cci-migrator.zip" -DestinationPath "." -Force
 ```
 
 ## Building
