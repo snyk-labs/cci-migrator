@@ -18,6 +18,7 @@ func main() {
 	var (
 		orgID       string
 		apiToken    string
+		apiEndpoint string
 		dbPath      string
 		backupPath  string
 		projectType string
@@ -30,6 +31,7 @@ func main() {
 	// Set up global flags
 	globalFlags.StringVar(&orgID, "org-id", "", "Snyk Organization ID")
 	globalFlags.StringVar(&apiToken, "api-token", "", "Snyk API Token")
+	globalFlags.StringVar(&apiEndpoint, "api-endpoint", "api.snyk.io", "Snyk API endpoint (default: api.snyk.io)")
 	globalFlags.StringVar(&dbPath, "db-path", "./cci-migration.db", "Path to SQLite database")
 	globalFlags.StringVar(&backupPath, "backup-path", "./backups", "Path to backup directory")
 	globalFlags.StringVar(&projectType, "project-type", "sast", "Project type to migrate (only sast supported currently)")
@@ -68,7 +70,7 @@ func main() {
 	defer db.Close()
 
 	// Initialize Snyk client
-	client := snyk.New(apiToken, debug)
+	client := snyk.New(apiToken, apiEndpoint, debug)
 
 	// Execute the appropriate command
 	switch command {
@@ -159,6 +161,7 @@ Commands:
 Global Options:
   --org-id          Snyk Organization ID
   --api-token       Snyk API Token
+  --api-endpoint    Snyk API endpoint (default: api.snyk.io)
   --db-path         Path to SQLite database (default: ./cci-migration.db)
   --backup-path     Path to backup directory (default: ./backups)
   --project-type    Project type to migrate (default: sast, only sast supported currently)

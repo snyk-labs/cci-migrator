@@ -70,6 +70,7 @@ Commands:
 Global Options:
   --org-id          Snyk Organization ID
   --api-token       Snyk API Token
+  --api-endpoint    Snyk API endpoint (default: api.snyk.io)
   --db-path         Path to SQLite database (default: ./cci-migration.db)
   --backup-path     Path to backup directory (default: ./backups)
   --project-type    Project type to migrate (default: sast, only sast supported currently)

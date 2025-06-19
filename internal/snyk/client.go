@@ -21,14 +21,14 @@ type Client struct {
 }
 
 // New creates a new Snyk API client
-func New(token string, debug bool) *Client {
+func New(token string, apiEndpoint string, debug bool) *Client {
 	return &Client{
 		HTTPClient: &http.Client{
 			Timeout: time.Second * 30,
 		},
 		Token:       token,
-		V1BaseURL:   "https://api.snyk.io/v1",
-		RestBaseURL: "https://api.snyk.io/rest",
+		V1BaseURL:   fmt.Sprintf("https://%s/v1", apiEndpoint),
+		RestBaseURL: fmt.Sprintf("https://%s/rest", apiEndpoint),
 		Debug:       debug,
 	}
 }
@@ -427,7 +427,7 @@ func (c *Client) getAllSASTIssues(initialURL string) ([]SASTIssue, error) {
 		if response.Links.Next != "" {
 			// If the next URL is relative (starts with /), prepend the base URL
 			if response.Links.Next[0] == '/' {
-				nextURL = "https://api.snyk.io" + response.Links.Next
+				nextURL = strings.Replace(c.RestBaseURL, "/rest", "", 1) + response.Links.Next
 			} else {
 				nextURL = response.Links.Next
 			}

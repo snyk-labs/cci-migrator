@@ -41,7 +41,7 @@ func TestGetProjectTarget(t *testing.T) {
 	// ---------------------------------------------------------------------
 	// Exercise GetProjectTarget with the test server
 	// ---------------------------------------------------------------------
-	client := New("", false)
+	client := New("", "api.snyk.io", false)
 	client.RestBaseURL = server.URL + "/rest"
 
 	tgt, err := client.GetProjectTarget(orgID, targetID)
