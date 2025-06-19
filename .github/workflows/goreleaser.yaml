@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
       - name: Run GoReleaser
         env:
-          PACKAGE_NAME: github.com/z4ce/snyk-auto-org
+          PACKAGE_NAME: github.com/z4ce/cci-migrator
           GOLANG_CROSS_VERSION: v1.24
         run: |
           docker run \

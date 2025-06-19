@@ -14,6 +14,33 @@ CCI Migrator facilitates the complex process of preserving existing SAST ignores
 
 The tool automatically detects CLI projects (projects with origin "cli") and excludes them from the retest phase since they cannot be retested via the API.
 
+## Installing
+Download the latest release for your platform from the [releases page](https://github.com/z4ce/cci-migrator/releases/latest). Or use the following commands:
+
+### macOS
+
+```bash
+curl -LsSf https://github.com/z4ce/cci-migrator/releases/latest/download/cci-migrator_Darwin_x86_64.zip -o cci-migrator.zip
+unzip cci-migrator.zip
+chmod +x cci-migrator
+```
+
+### Linux
+
+```bash
+curl -LsSf https://github.com/z4ce/cci-migrator/releases/latest/download/cci-migrator_Linux_x86_64.zip -o cci-migrator.zip
+unzip cci-migrator.zip
+chmod +x cci-migrator
+```
+
+### Windows
+
+```bash
+curl -LsSf https://github.com/z4ce/cci-migrator/releases/latest/download/cci-migrator_Windows_x86_64.zip -o cci-migrator.zip
+unzip cci-migrator.zip
+chmod +x cci-migrator.exe
+```
+
 ## Building
 
 To build the CLI from source:
