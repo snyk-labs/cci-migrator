@@ -14,7 +14,22 @@ CCI Migrator facilitates the complex process of preserving existing SAST ignores
 
 The tool automatically detects CLI projects (projects with origin "cli") and excludes them from the retest phase since they cannot be retested via the API.
 
+If a conflict is detected (multiple v1 ignores for the same finding), a conflict resolution strategy will be employed. At this time there is only one strategy in place that:
+
+* prioritize ignores in order: wont-fix, not-vulnerable, temporary
+* In case of a tie, choose the earliest ignore
+
+As the need arises other strategies might be made available. 
+
+## Example of a migrated ignore
+
+One of the key features of the migration script is that the history from the previous ignore is put into the description of the consistent ignore. A conflict resolution strategy for when multiple v1 ignores match the same finding ID is also applied.
+
+
+![](assets/20250619_150848_image.png)
+
 ## Installing
+
 Download the latest release for your platform from the [releases page](https://github.com/z4ce/cci-migrator/releases/latest). Or use the following commands:
 
 ### macOS
@@ -115,9 +130,10 @@ Global Options:
 
 - Go 1.21 or higher
 
-See [DESIGN.md](DESIGN.md) for detailed information about the architecture and implementation. 
+See [DESIGN.md](DESIGN.md) for detailed information about the architecture and implementation.
 
 ## Debugging
+
 Beyond using --debug for additional logging, a very useful way to inspect the current database state is to use the sqlite3 CLI tool to inspect the database.
 
 ```bash
