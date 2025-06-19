@@ -77,6 +77,7 @@ Global Options:
   --strategy        Conflict resolution strategy (default: priority-earliest)
   --override-csv    Path to CSV with manual override mappings
   --backup-file     Specific backup file to restore (for restore command)
+  --debug           Enable debug output of HTTP requests and responses
 ```
 
 ## Example Migration Workflow
@@ -115,3 +116,22 @@ Global Options:
 - Go 1.21 or higher
 
 See [DESIGN.md](DESIGN.md) for detailed information about the architecture and implementation. 
+
+## Debugging
+Beyond using --debug for additional logging, a very useful way to inspect the current database state is to use the sqlite3 CLI tool to inspect the database.
+
+```bash
+sqlite3 cci-migration.db
+```
+
+Then you can use the following commands to inspect the database:
+
+```sql
+.tables
+.headers on
+SELECT * FROM ignores;
+SELECT * FROM issues;
+SELECT * FROM projects;
+.excel -- if you want to export the data to a CSV file
+SELECT * FROM policies;
+```
