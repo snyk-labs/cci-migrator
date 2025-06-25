@@ -10,7 +10,11 @@ import (
 	"github.com/z4ce/cci-migrator/internal/snyk"
 )
 
-// ExecuteCommand handles the execution phase of the migration
+// ExecuteCommand handles the execution phase of the migration.
+// The migration is designed to be idempotent - if a policy already exists
+// (indicated by a 409 conflict response), it is treated as a successful
+// migration rather than a failure. This allows the migration to be safely
+// re-run without duplicating policies.
 type ExecuteCommand struct {
 	db     DatabaseInterface
 	client ClientInterface
@@ -138,6 +142,15 @@ func (c *ExecuteCommand) Execute() error {
 			}
 
 			externalID := createdPolicy.ID
+
+			// Handle the case where we got a 409 conflict and no ID was returned
+			// In this case, we'll use a placeholder ID to indicate successful migration
+			// but the policy already existed
+			if externalID == "" {
+				log.Printf("Policy for asset key %s already exists (409 conflict), treating as successful migration", policy.AssetKey)
+				c.debugLog("Policy creation returned empty ID (likely 409 conflict), using placeholder ID")
+				externalID = fmt.Sprintf("existing-policy-%s", policy.AssetKey)
+			}
 			now := time.Now()
 
 			// Retry transaction a few times if it fails with a lock error

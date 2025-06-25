@@ -1,3 +1,7 @@
+// Package snyk provides a client for interacting with the Snyk API.
+// The client is designed to support idempotent operations - when creating
+// resources like policies, 409 (Conflict) responses are treated as successful
+// operations rather than errors, allowing migration scripts to be safely re-run.
 package snyk
 
 import (
@@ -918,7 +922,11 @@ func (c *Client) GetPolicy(orgID, policyID string) (*Policy, error) {
 	return &policy, nil
 }
 
-// CreatePolicy creates a new policy using the Policy API
+// CreatePolicy creates a new policy using the Policy API.
+// This method is designed to be idempotent - if a policy with the same
+// attributes already exists (indicated by a 409 conflict response),
+// it will be treated as a successful operation rather than an error.
+// This allows migration operations to be safely re-run.
 func (c *Client) CreatePolicy(orgID string, attributes CreatePolicyAttributes, meta map[string]interface{}) (*Policy, error) {
 	url := fmt.Sprintf("%s/orgs/%s/policies?version=2024-10-15", c.RestBaseURL, orgID)
 
@@ -952,8 +960,31 @@ func (c *Client) CreatePolicy(orgID string, attributes CreatePolicyAttributes, m
 		c.debugResponse(resp)
 	}
 
-	if resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
+	// Handle both successful creation (201) and conflict (409) as success
+	// A 409 conflict indicates the policy already exists, which is acceptable for idempotent operation
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code: %d for URL: %s, body: %s", resp.StatusCode, resp.Request.URL, string(bodyBytes))
+	}
+
+	// For 409 conflicts, we may not get a response body with the policy data
+	// In this case, we need to handle the conflict as a successful operation
+	if resp.StatusCode == http.StatusConflict {
+		// For conflicts, try to parse any error message but don't fail if we can't
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		if c.Debug {
+			fmt.Fprintf(os.Stderr, "Policy creation conflict (409), policy likely already exists: %s\n", string(bodyBytes))
+		}
+
+		// Since we can't reliably get the policy ID from a 409 response,
+		// we'll return a minimal policy object that indicates success
+		// The caller should be prepared to handle this case where ID might be empty
+		return &Policy{
+			Name:            attributes.Name,
+			ActionType:      attributes.ActionType,
+			Action:          attributes.Action,
+			ConditionsGroup: attributes.ConditionsGroup,
+		}, nil
 	}
 
 	var response struct {

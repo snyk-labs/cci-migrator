@@ -14,6 +14,18 @@ CCI Migrator facilitates the complex process of preserving existing SAST ignores
 
 The tool automatically detects CLI projects (projects with origin "cli") and excludes them from the retest phase since they cannot be retested via the API.
 
+## Idempotent Operations
+
+The migration tool is designed to be **idempotent** - it can be safely re-run multiple times without creating duplicate policies or failing due to existing resources. If a policy already exists when the migration attempts to create it (indicated by a 409 Conflict response from the API), the existing policy is treated as a successful migration rather than an error. This allows you to:
+
+- Safely re-run failed migrations without starting over
+- Resume partial migrations from where they left off
+- Run the migration multiple times without side effects
+
+Any conflicting consistent ignore (policy) that already exists will be considered a successful migration. This does mean an existing policy will be overwritten with a new migration policy. That is existing Code Consistent Ignores will always stay in place and not be affected by the migration.
+
+## Conflict Resolution
+
 If a conflict is detected (multiple v1 ignores for the same finding), a conflict resolution strategy will be employed. At this time there is only one strategy in place that:
 
 * prioritize ignores in order: wont-fix, not-vulnerable, temporary
@@ -76,7 +88,7 @@ Commands:
   restore     Restore from backup
   plan        Create migration plan and resolve conflicts
   print-plan  Display the migration plan
-  execute     Create new policies based on plan
+  execute     Create new policies based on plan (idempotent - existing policies treated as successful)
   retest      Retest projects with changes
   cleanup     Delete existing ignores
   status      Show migration status
