@@ -23,9 +23,12 @@ type DatabaseInterface interface {
 	InsertIssue(issue *database.Issue) error
 	InsertProject(project *database.Project) error
 	InsertPolicy(policy *database.Policy) error
+	InsertOrganization(org *database.Organization) error
 	GetIssuesByOrgID(orgID string) ([]*database.Issue, error)
 	GetProjectsByOrgID(orgID string) ([]*database.Project, error)
 	GetPoliciesByOrgID(orgID string) ([]*database.Policy, error)
+	GetOrganizationsByGroupID(groupID string) ([]*database.Organization, error)
+	GetAllOrganizations() ([]*database.Organization, error)
 	UpdateCollectionMetadata(completedAt time.Time, collectionVersion, apiVersion string) error
 	Exec(query string, args ...interface{}) (interface{}, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
@@ -47,6 +50,7 @@ type ClientInterface interface {
 	GetIgnores(orgID, projectID string) ([]snyk.Ignore, error)
 	GetProjectTarget(orgID, targetID string) (*snyk.Target, error)
 	GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, error)
+	GetOrganizationsInGroup(groupID string) ([]snyk.Organization, error)
 	CreatePolicy(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
 	RetestProject(orgID string, target *snyk.Target) error
 	DeleteIgnore(orgID, projectID, ignoreID string) error
@@ -54,19 +58,21 @@ type ClientInterface interface {
 
 // GatherCommand handles the gathering of ignores, issues, and projects
 type GatherCommand struct {
-	db     DatabaseInterface
-	client ClientInterface
-	orgID  string
-	debug  bool
+	db      DatabaseInterface
+	client  ClientInterface
+	orgID   string
+	groupID string
+	debug   bool
 }
 
 // NewGatherCommand creates a new gather command
-func NewGatherCommand(db DatabaseInterface, client ClientInterface, orgID string, debug bool) *GatherCommand {
+func NewGatherCommand(db DatabaseInterface, client ClientInterface, orgID, groupID string, debug bool) *GatherCommand {
 	return &GatherCommand{
-		db:     db,
-		client: client,
-		orgID:  orgID,
-		debug:  debug,
+		db:      db,
+		client:  client,
+		orgID:   orgID,
+		groupID: groupID,
+		debug:   debug,
 	}
 }
 
@@ -79,11 +85,65 @@ func (c *GatherCommand) debugLog(format string, args ...interface{}) {
 
 // Execute runs the gather command
 func (c *GatherCommand) Execute() error {
-	log.Printf("Starting data gathering for organization: %s", c.orgID)
+	// Step 0: If groupID is provided, collect and store organizations first
+	var orgIDs []string
+	if c.groupID != "" {
+		log.Printf("Collecting organizations for group: %s", c.groupID)
+		orgs, err := c.client.GetOrganizationsInGroup(c.groupID)
+		if err != nil {
+			return fmt.Errorf("failed to get organizations for group %s: %w", c.groupID, err)
+		}
+
+		log.Printf("Found %d organizations in group %s", len(orgs), c.groupID)
+
+		// Store organizations in database
+		for _, org := range orgs {
+			dbOrg := &database.Organization{
+				ID:                    org.ID,
+				GroupID:               c.groupID,
+				Name:                  org.Name,
+				Slug:                  org.Slug,
+				IsPersonal:            org.IsPersonal,
+				CreatedAt:             org.CreatedAt,
+				UpdatedAt:             org.UpdatedAt,
+				AccessRequestsEnabled: org.AccessRequestsEnabled,
+				CollectedAt:           time.Now(),
+			}
+			if err := c.db.InsertOrganization(dbOrg); err != nil {
+				return fmt.Errorf("failed to store organization %s: %w", org.ID, err)
+			}
+			orgIDs = append(orgIDs, org.ID)
+		}
+
+		log.Printf("Stored %d organizations in database", len(orgIDs))
+	} else if c.orgID != "" {
+		// Single organization mode
+		orgIDs = []string{c.orgID}
+	} else {
+		return fmt.Errorf("either orgID or groupID must be provided")
+	}
+
+	// Now process each organization
+	for i, currentOrgID := range orgIDs {
+		if len(orgIDs) > 1 {
+			log.Printf("\n=== Processing organization %d/%d: %s ===", i+1, len(orgIDs), currentOrgID)
+		}
+
+		if err := c.gatherDataForOrganization(currentOrgID); err != nil {
+			return fmt.Errorf("failed to gather data for organization %s: %w", currentOrgID, err)
+		}
+	}
+
+	return nil
+}
+
+// gatherDataForOrganization handles the data gathering for a single organization
+func (c *GatherCommand) gatherDataForOrganization(orgID string) error {
+	log.Printf("Starting data gathering for organization: %s", orgID)
 
 	// Phase 1: Gather all SAST projects
 	log.Printf("Phase 1: Gathering SAST projects...")
-	projects, err := c.client.GetProjects(c.orgID)
+	projects, err := c.client.GetProjects(orgID)
 	if err != nil {
 		return fmt.Errorf("failed to get projects: %w", err)
 	}
@@ -107,7 +167,7 @@ func (c *GatherCommand) Execute() error {
 			continue
 		}
 
-		target, err := c.client.GetProjectTarget(c.orgID, targetID)
+		target, err := c.client.GetProjectTarget(orgID, targetID)
 		if err != nil {
 			log.Printf("Warning: failed to get target for project %s: %v", project.ID, err)
 			continue
@@ -126,7 +186,7 @@ func (c *GatherCommand) Execute() error {
 
 		dbProject := &database.Project{
 			ID:                project.ID,
-			OrgID:             c.orgID,
+			OrgID:             orgID,
 			Name:              project.Name,
 			TargetInformation: string(targetInfo),
 			IsCliProject:      isCliProject,
@@ -149,7 +209,7 @@ func (c *GatherCommand) Execute() error {
 	for _, project := range projects {
 		log.Printf("Processing ignores for project: %s (%s)", project.Name, project.ID)
 
-		ignores, err := c.client.GetIgnores(c.orgID, project.ID)
+		ignores, err := c.client.GetIgnores(orgID, project.ID)
 		if err != nil {
 			log.Printf("Warning: failed to get ignores for project %s: %v", project.ID, err)
 			continue
@@ -175,7 +235,7 @@ func (c *GatherCommand) Execute() error {
 			dbIgnore := &database.Ignore{
 				ID:            ignore.ID,
 				IssueID:       ignore.ID, // The ignore ID is the same as the issue ID
-				OrgID:         c.orgID,
+				OrgID:         orgID,
 				ProjectID:     project.ID,
 				Reason:        ignore.Reason,
 				IgnoreType:    ignore.ReasonType,
@@ -198,7 +258,7 @@ func (c *GatherCommand) Execute() error {
 	log.Printf("Phase 3: Gathering SAST issues and asset keys...")
 
 	// Get all SAST issues for the organization at once
-	issues, err := c.client.GetSASTIssues(c.orgID, "")
+	issues, err := c.client.GetSASTIssues(orgID, "")
 	if err != nil {
 		log.Printf("Warning: failed to get SAST issues: %v", err)
 		return fmt.Errorf("failed to get SAST issues: %w", err)
@@ -219,7 +279,7 @@ func (c *GatherCommand) Execute() error {
 		// Store issue in database
 		dbIssue := &database.Issue{
 			ID:            issue.ID,
-			OrgID:         c.orgID,
+			OrgID:         orgID,
 			ProjectID:     issue.Relationships.ScanItem.Data.ID,
 			AssetKey:      issue.Attributes.KeyAsset,
 			ProjectKey:    issue.Attributes.Key,
@@ -238,7 +298,7 @@ func (c *GatherCommand) Execute() error {
 	}
 
 	// Phase 3.1: Update asset keys for all ignores from issues
-	log.Printf("Phase 3.1: Updating asset keys for all ignores in organization %s...", c.orgID)
+	log.Printf("Phase 3.1: Updating asset keys for all ignores in organization %s...", orgID)
 	updateIgnoresQuery := `
 		UPDATE ignores
 		SET asset_key = (
@@ -260,9 +320,9 @@ func (c *GatherCommand) Execute() error {
 			  AND i.asset_key != ''
 		);`
 
-	result, err := c.db.Exec(updateIgnoresQuery, c.orgID)
+	result, err := c.db.Exec(updateIgnoresQuery, orgID)
 	if err != nil {
-		log.Printf("Warning: failed to bulk update asset keys for ignores in org %s: %v", c.orgID, err)
+		log.Printf("Warning: failed to bulk update asset keys for ignores in org %s: %v", orgID, err)
 		// Depending on requirements, this could be a fatal error:
 		// return fmt.Errorf("failed to bulk update asset keys for ignores: %w", err)
 	} else {
@@ -270,13 +330,13 @@ func (c *GatherCommand) Execute() error {
 		if res, ok := result.(interface{ RowsAffected() (int64, error) }); ok {
 			rowsAffected, raErr := res.RowsAffected()
 			if raErr != nil {
-				log.Printf("Warning: could not get rows affected after bulk update for org %s: %v", c.orgID, raErr)
+				log.Printf("Warning: could not get rows affected after bulk update for org %s: %v", orgID, raErr)
 			} else {
-				log.Printf("Successfully executed bulk update for ignores in org %s. Rows affected: %d", c.orgID, rowsAffected)
+				log.Printf("Successfully executed bulk update for ignores in org %s. Rows affected: %d", orgID, rowsAffected)
 			}
 		} else {
 			// Fallback log if RowsAffected is not available
-			log.Printf("Successfully executed bulk update for ignores in organization %s (RowsAffected not available).", c.orgID)
+			log.Printf("Successfully executed bulk update for ignores in organization %s (RowsAffected not available).", orgID)
 		}
 	}
 
@@ -286,11 +346,11 @@ func (c *GatherCommand) Execute() error {
 	}
 
 	// Print summary
-	ignores, err := c.db.GetIgnoresByOrgID(c.orgID)
+	ignores, err := c.db.GetIgnoresByOrgID(orgID)
 	if err != nil {
 		log.Printf("Error checking ignores after gathering: %v", err)
 	} else {
-		log.Printf("Found %d SAST ignores for organization %s after gathering", len(ignores), c.orgID)
+		log.Printf("Found %d SAST ignores for organization %s after gathering", len(ignores), orgID)
 
 		// Count ignores with asset keys
 		ignoresWithAssetKey := 0
@@ -306,21 +366,21 @@ func (c *GatherCommand) Execute() error {
 	}
 
 	// Get issues count
-	countRow := c.db.QueryRow("SELECT COUNT(*) FROM issues WHERE org_id = ?", c.orgID)
+	countRow := c.db.QueryRow("SELECT COUNT(*) FROM issues WHERE org_id = ?", orgID)
 	var issuesCount int
 	if err := countRow.Scan(&issuesCount); err != nil {
 		log.Printf("Error checking issues count: %v", err)
 	} else {
-		log.Printf("Found %d SAST issues for organization %s", issuesCount, c.orgID)
+		log.Printf("Found %d SAST issues for organization %s", issuesCount, orgID)
 	}
 
 	// Get projects count
-	projectCountRow := c.db.QueryRow("SELECT COUNT(*) FROM projects WHERE org_id = ?", c.orgID)
+	projectCountRow := c.db.QueryRow("SELECT COUNT(*) FROM projects WHERE org_id = ?", orgID)
 	var projectsCount int
 	if err := projectCountRow.Scan(&projectsCount); err != nil {
 		log.Printf("Error checking projects count: %v", err)
 	} else {
-		log.Printf("Found %d SAST projects for organization %s", projectsCount, c.orgID)
+		log.Printf("Found %d SAST projects for organization %s", projectsCount, orgID)
 	}
 
 	log.Printf("Data gathering completed successfully")
@@ -329,10 +389,43 @@ func (c *GatherCommand) Execute() error {
 
 // Print prints the contents of the database
 func (c *GatherCommand) Print() error {
-	log.Printf("Printing gathered data for organization: %s", c.orgID)
+	// Determine which organizations to print
+	var orgIDs []string
+	if c.groupID != "" {
+		// Get organizations from database
+		orgs, err := c.db.GetOrganizationsByGroupID(c.groupID)
+		if err != nil {
+			return fmt.Errorf("failed to get organizations for group %s: %w", c.groupID, err)
+		}
+		for _, org := range orgs {
+			orgIDs = append(orgIDs, org.ID)
+		}
+		log.Printf("Printing gathered data for %d organizations in group: %s", len(orgIDs), c.groupID)
+	} else if c.orgID != "" {
+		orgIDs = []string{c.orgID}
+		log.Printf("Printing gathered data for organization: %s", c.orgID)
+	} else {
+		return fmt.Errorf("either orgID or groupID must be provided")
+	}
 
+	// Print data for each organization
+	for i, currentOrgID := range orgIDs {
+		if len(orgIDs) > 1 {
+			log.Printf("\n=== Organization %d/%d: %s ===", i+1, len(orgIDs), currentOrgID)
+		}
+
+		if err := c.printDataForOrganization(currentOrgID); err != nil {
+			return fmt.Errorf("failed to print data for organization %s: %w", currentOrgID, err)
+		}
+	}
+
+	return nil
+}
+
+// printDataForOrganization prints the data for a single organization
+func (c *GatherCommand) printDataForOrganization(orgID string) error {
 	// Print ignores
-	ignores, err := c.db.GetIgnoresByOrgID(c.orgID)
+	ignores, err := c.db.GetIgnoresByOrgID(orgID)
 	if err != nil {
 		return fmt.Errorf("failed to get ignores: %w", err)
 	}
@@ -349,7 +442,7 @@ func (c *GatherCommand) Print() error {
 	}
 
 	// Print issues (get from database)
-	rows, err := c.db.Query("SELECT id, org_id, project_id, asset_key, project_key FROM issues WHERE org_id = ?", c.orgID)
+	rows, err := c.db.Query("SELECT id, org_id, project_id, asset_key, project_key FROM issues WHERE org_id = ?", orgID)
 	if err != nil {
 		return fmt.Errorf("failed to get issues: %w", err)
 	}
@@ -392,7 +485,7 @@ func (c *GatherCommand) Print() error {
 	}
 
 	// Print projects (get from database)
-	projectRows, err := c.db.Query("SELECT id, org_id, name FROM projects WHERE org_id = ?", c.orgID)
+	projectRows, err := c.db.Query("SELECT id, org_id, name FROM projects WHERE org_id = ?", orgID)
 	if err != nil {
 		return fmt.Errorf("failed to get projects: %w", err)
 	}

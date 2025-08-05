@@ -24,7 +24,7 @@ var _ = Describe("Gather Command", func() {
 	BeforeEach(func() {
 		mockDB = NewMockDB()
 		mockClient = NewMockClient()
-		cmd = commands.NewGatherCommand(mockDB, mockClient, "test-org-id", false)
+		cmd = commands.NewGatherCommand(mockDB, mockClient, "test-org-id", "", false)
 	})
 
 	Describe("Execute", func() {
@@ -492,6 +492,72 @@ var _ = Describe("Gather Command", func() {
 			Expect(project.IsCliProject).To(BeTrue(), "CLI origin project should be marked as CLI project")
 		})
 
+		It("should collect and store organizations when groupID is provided", func() {
+			// Create a command with groupID
+			cmdWithGroup := commands.NewGatherCommand(mockDB, mockClient, "", "test-group-id", false)
+
+			// Set up mock client to return organizations
+			mockClient.GetOrganizationsInGroupFunc = func(groupID string) ([]snyk.Organization, error) {
+				Expect(groupID).To(Equal("test-group-id"))
+				return []snyk.Organization{
+					{
+						ID:                    "org-1",
+						Name:                  "Organization 1",
+						Slug:                  "org-1-slug",
+						GroupID:               "test-group-id",
+						IsPersonal:            false,
+						CreatedAt:             time.Now(),
+						UpdatedAt:             time.Now(),
+						AccessRequestsEnabled: true,
+					},
+					{
+						ID:                    "org-2",
+						Name:                  "Organization 2",
+						Slug:                  "org-2-slug",
+						GroupID:               "test-group-id",
+						IsPersonal:            false,
+						CreatedAt:             time.Now(),
+						UpdatedAt:             time.Now(),
+						AccessRequestsEnabled: true,
+					},
+				}, nil
+			}
+
+			// Set up mock client responses for each organization
+			mockClient.GetProjectsFunc = func(orgID string) ([]snyk.Project, error) {
+				return []snyk.Project{}, nil // Return empty projects for simplicity
+			}
+
+			mockClient.GetIgnoresFunc = func(orgID, projectID string) ([]snyk.Ignore, error) {
+				return []snyk.Ignore{}, nil // Return empty ignores for simplicity
+			}
+
+			mockClient.GetSASTIssuesFunc = func(orgID, projectID string) ([]snyk.SASTIssue, error) {
+				return []snyk.SASTIssue{}, nil // Return empty issues for simplicity
+			}
+
+			// Execute the command
+			err := cmdWithGroup.Execute()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify that organizations were stored
+			Expect(mockDB.InsertOrganizationCalls).To(HaveLen(2))
+
+			org1 := mockDB.InsertOrganizationCalls[0]
+			Expect(org1.ID).To(Equal("org-1"))
+			Expect(org1.Name).To(Equal("Organization 1"))
+			Expect(org1.GroupID).To(Equal("test-group-id"))
+			Expect(org1.IsPersonal).To(BeFalse())
+			Expect(org1.AccessRequestsEnabled).To(BeTrue())
+
+			org2 := mockDB.InsertOrganizationCalls[1]
+			Expect(org2.ID).To(Equal("org-2"))
+			Expect(org2.Name).To(Equal("Organization 2"))
+			Expect(org2.GroupID).To(Equal("test-group-id"))
+			Expect(org2.IsPersonal).To(BeFalse())
+			Expect(org2.AccessRequestsEnabled).To(BeTrue())
+		})
+
 		It("should be idempotent and allow running gather multiple times", func() {
 			// Set up mock client responses that will be called twice
 			mockClient.GetProjectsFunc = func(orgID string) ([]snyk.Project, error) {
@@ -926,6 +992,7 @@ type MockDB struct {
 	InsertIgnoreCalls             []*database.Ignore
 	InsertIssueCalls              []*database.Issue
 	InsertProjectCalls            []*database.Project
+	InsertOrganizationCalls       []*database.Organization
 	UpdateCollectionMetadataCalls []struct{}
 	ExecCalls                     []MockExecCall
 	GetIgnoresByOrgIDFunc         func(orgID string) ([]*database.Ignore, error)
@@ -933,9 +1000,12 @@ type MockDB struct {
 	InsertIssueFunc               func(issue *database.Issue) error
 	InsertProjectFunc             func(project *database.Project) error
 	InsertPolicyFunc              func(policy *database.Policy) error
+	InsertOrganizationFunc        func(org *database.Organization) error
 	GetIssuesByOrgIDFunc          func(orgID string) ([]*database.Issue, error)
 	GetProjectsByOrgIDFunc        func(orgID string) ([]*database.Project, error)
 	GetPoliciesByOrgIDFunc        func(orgID string) ([]*database.Policy, error)
+	GetOrganizationsByGroupIDFunc func(groupID string) ([]*database.Organization, error)
+	GetAllOrganizationsFunc       func() ([]*database.Organization, error)
 	UpdateCollectionMetadataFunc  func(time.Time, string, string) error
 	ExecFunc                      func(query string, args ...interface{}) (interface{}, error)
 	QueryRowFunc                  func(query string, args ...interface{}) *sql.Row
@@ -957,6 +1027,7 @@ func NewMockDB() *MockDB {
 		InsertIgnoreCalls:             []*database.Ignore{},
 		InsertIssueCalls:              []*database.Issue{},
 		InsertProjectCalls:            []*database.Project{},
+		InsertOrganizationCalls:       []*database.Organization{},
 		UpdateCollectionMetadataCalls: []struct{}{},
 		ExecCalls:                     []MockExecCall{},
 		GetIgnoresByOrgIDFunc:         func(orgID string) ([]*database.Ignore, error) { return []*database.Ignore{}, nil },
@@ -964,9 +1035,12 @@ func NewMockDB() *MockDB {
 		InsertIssueFunc:               func(issue *database.Issue) error { return nil },
 		InsertProjectFunc:             func(project *database.Project) error { return nil },
 		InsertPolicyFunc:              func(policy *database.Policy) error { return nil },
+		InsertOrganizationFunc:        func(org *database.Organization) error { return nil },
 		GetIssuesByOrgIDFunc:          func(orgID string) ([]*database.Issue, error) { return []*database.Issue{}, nil },
 		GetProjectsByOrgIDFunc:        func(orgID string) ([]*database.Project, error) { return []*database.Project{}, nil },
 		GetPoliciesByOrgIDFunc:        func(orgID string) ([]*database.Policy, error) { return []*database.Policy{}, nil },
+		GetOrganizationsByGroupIDFunc: func(groupID string) ([]*database.Organization, error) { return []*database.Organization{}, nil },
+		GetAllOrganizationsFunc:       func() ([]*database.Organization, error) { return []*database.Organization{}, nil },
 		UpdateCollectionMetadataFunc:  func(time.Time, string, string) error { return nil },
 		ExecFunc:                      func(query string, args ...interface{}) (interface{}, error) { return nil, nil },
 		QueryRowFunc:                  func(query string, args ...interface{}) *sql.Row { return sqlDB.QueryRow("SELECT 1") },
@@ -1037,6 +1111,22 @@ func (m *MockDB) GetPoliciesByOrgID(orgID string) ([]*database.Policy, error) {
 	return m.GetPoliciesByOrgIDFunc(orgID)
 }
 
+// InsertOrganization implements the DatabaseInterface
+func (m *MockDB) InsertOrganization(org *database.Organization) error {
+	m.InsertOrganizationCalls = append(m.InsertOrganizationCalls, org)
+	return m.InsertOrganizationFunc(org)
+}
+
+// GetOrganizationsByGroupID implements the DatabaseInterface
+func (m *MockDB) GetOrganizationsByGroupID(groupID string) ([]*database.Organization, error) {
+	return m.GetOrganizationsByGroupIDFunc(groupID)
+}
+
+// GetAllOrganizations implements the DatabaseInterface
+func (m *MockDB) GetAllOrganizations() ([]*database.Organization, error) {
+	return m.GetAllOrganizationsFunc()
+}
+
 // Begin implements the DatabaseInterface
 func (m *MockDB) Begin() (interface{}, error) {
 	if m.BeginFunc != nil {
@@ -1083,21 +1173,23 @@ func (m *MockTransaction) Rollback() error {
 
 // Mock Client implementation
 type MockClient struct {
-	GetProjectsFunc      func(orgID string) ([]snyk.Project, error)
-	GetIgnoresFunc       func(orgID, projectID string) ([]snyk.Ignore, error)
-	GetProjectTargetFunc func(orgID, targetID string) (*snyk.Target, error)
-	GetSASTIssuesFunc    func(orgID, projectID string) ([]snyk.SASTIssue, error)
-	CreatePolicyFunc     func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
-	RetestProjectFunc    func(orgID string, target *snyk.Target) error
-	DeleteIgnoreFunc     func(orgID, projectID, ignoreID string) error
+	GetProjectsFunc             func(orgID string) ([]snyk.Project, error)
+	GetIgnoresFunc              func(orgID, projectID string) ([]snyk.Ignore, error)
+	GetProjectTargetFunc        func(orgID, targetID string) (*snyk.Target, error)
+	GetSASTIssuesFunc           func(orgID, projectID string) ([]snyk.SASTIssue, error)
+	GetOrganizationsInGroupFunc func(groupID string) ([]snyk.Organization, error)
+	CreatePolicyFunc            func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
+	RetestProjectFunc           func(orgID string, target *snyk.Target) error
+	DeleteIgnoreFunc            func(orgID, projectID, ignoreID string) error
 }
 
 func NewMockClient() *MockClient {
 	return &MockClient{
-		GetProjectsFunc:      func(orgID string) ([]snyk.Project, error) { return []snyk.Project{}, nil },
-		GetIgnoresFunc:       func(orgID, projectID string) ([]snyk.Ignore, error) { return []snyk.Ignore{}, nil },
-		GetProjectTargetFunc: func(orgID, targetID string) (*snyk.Target, error) { return &snyk.Target{}, nil },
-		GetSASTIssuesFunc:    func(orgID, projectID string) ([]snyk.SASTIssue, error) { return []snyk.SASTIssue{}, nil },
+		GetProjectsFunc:             func(orgID string) ([]snyk.Project, error) { return []snyk.Project{}, nil },
+		GetIgnoresFunc:              func(orgID, projectID string) ([]snyk.Ignore, error) { return []snyk.Ignore{}, nil },
+		GetProjectTargetFunc:        func(orgID, targetID string) (*snyk.Target, error) { return &snyk.Target{}, nil },
+		GetSASTIssuesFunc:           func(orgID, projectID string) ([]snyk.SASTIssue, error) { return []snyk.SASTIssue{}, nil },
+		GetOrganizationsInGroupFunc: func(groupID string) ([]snyk.Organization, error) { return []snyk.Organization{}, nil },
 		CreatePolicyFunc: func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error) {
 			return &snyk.Policy{ID: "mock-policy-id"}, nil
 		},
@@ -1120,6 +1212,11 @@ func (m *MockClient) GetProjectTarget(orgID, targetID string) (*snyk.Target, err
 
 func (m *MockClient) GetSASTIssues(orgID, projectID string) ([]snyk.SASTIssue, error) {
 	return m.GetSASTIssuesFunc(orgID, projectID)
+}
+
+// GetOrganizationsInGroup implements the ClientInterface
+func (m *MockClient) GetOrganizationsInGroup(groupID string) ([]snyk.Organization, error) {
+	return m.GetOrganizationsInGroupFunc(groupID)
 }
 
 // CreatePolicy implements the ClientInterface

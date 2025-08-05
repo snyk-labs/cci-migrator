@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,6 +23,16 @@ type Client struct {
 	V1BaseURL   string
 	RestBaseURL string
 	Debug       bool
+}
+
+// RequestOptions holds common request configuration
+type RequestOptions struct {
+	Method      string
+	Path        string
+	QueryParams map[string]string
+	Body        interface{}
+	Headers     map[string]string
+	BaseURL     string
 }
 
 // New creates a new Snyk API client
@@ -189,30 +200,294 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("rate limit exceeded: %s, retry after %v", e.Message, e.RetryAfter)
 }
 
-// handleResponse checks for rate limits and other common API response issues
-func (c *Client) handleResponse(resp *http.Response) error {
-	if c.Debug {
-		fmt.Fprintf(os.Stderr, "Response status code: %d\n", resp.StatusCode)
-		fmt.Fprintf(os.Stderr, "Response headers: %v\n", resp.Header)
+// buildURL constructs a full URL with query parameters
+func (c *Client) buildURL(baseURL, path string, queryParams map[string]string) string {
+	u := fmt.Sprintf("%s%s", baseURL, path)
+	if len(queryParams) > 0 {
+		values := url.Values{}
+		for key, value := range queryParams {
+			values.Add(key, value)
+		}
+		u = fmt.Sprintf("%s?%s", u, values.Encode())
+	}
+	return u
+}
+
+// setCommonHeaders sets the standard headers for API requests
+func (c *Client) setCommonHeaders(req *http.Request, contentType string) {
+	req.Header.Set("Authorization", "token "+c.Token)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+}
+
+// makeRequest creates and executes an HTTP request with common error handling
+func (c *Client) makeRequest(opts RequestOptions) (*http.Response, error) {
+	// Determine base URL
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = c.RestBaseURL
 	}
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		retryAfter := resp.Header.Get("Retry-After")
-		seconds, err := time.ParseDuration(retryAfter + "s")
+	// Build URL with query parameters
+	fullURL := c.buildURL(baseURL, opts.Path, opts.QueryParams)
+
+	// Prepare request body
+	var bodyReader io.Reader
+	var bodyBytes []byte
+	if opts.Body != nil {
+		var err error
+		bodyBytes, err = json.Marshal(opts.Body)
 		if err != nil {
-			seconds = 60 * time.Second // default to 60 seconds if header is missing or invalid
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		return &RateLimitError{
-			RetryAfter: seconds,
-			Message:    "API rate limit exceeded",
+		bodyReader = bytes.NewBuffer(bodyBytes)
+	}
+
+	// Create request
+	req, err := http.NewRequest(opts.Method, fullURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set common headers
+	c.setCommonHeaders(req, opts.Headers["Content-Type"])
+
+	// Set additional headers
+	for key, value := range opts.Headers {
+		if key != "Content-Type" { // Already handled above
+			req.Header.Set(key, value)
 		}
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
+	// Debug request
+	c.debugRequest(req, bodyBytes)
+
+	// Execute request
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+
+	// Debug response
+	if c.Debug {
+		c.debugResponse(resp)
+	}
+
+	return resp, nil
+}
+
+// makeRequestWithRetry executes a request with rate limiting retry logic
+func (c *Client) makeRequestWithRetry(opts RequestOptions, maxRetries int) (*http.Response, error) {
+	var lastResp *http.Response
+	retryCount := 0
+
+	for retryCount <= maxRetries {
+		resp, err := c.makeRequest(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		// Handle rate limiting
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if retryCount >= maxRetries {
+				return nil, fmt.Errorf("maximum retries exceeded for rate limiting")
+			}
+
+			retryAfter := resp.Header.Get("Retry-After")
+			seconds, err := time.ParseDuration(retryAfter + "s")
+			if err != nil {
+				seconds = 60 * time.Second // default to 60 seconds
+			}
+
+			if c.Debug {
+				fmt.Fprintf(os.Stderr, "Rate limited, waiting for %v seconds before retry\n", seconds.Seconds())
+			}
+
+			time.Sleep(seconds)
+			retryCount++
+			continue
+		}
+
+		lastResp = resp
+		break
+	}
+
+	return lastResp, nil
+}
+
+// handleJSONResponse handles common response processing and JSON decoding
+func (c *Client) handleJSONResponse(resp *http.Response, target interface{}, allowedStatusCodes ...int) error {
+	defer resp.Body.Close()
+
+	// Default allowed status codes
+	if len(allowedStatusCodes) == 0 {
+		allowedStatusCodes = []int{http.StatusOK}
+	}
+
+	// Check status code
+	statusAllowed := false
+	for _, code := range allowedStatusCodes {
+		if resp.StatusCode == code {
+			statusAllowed = true
+			break
+		}
+	}
+
+	if !statusAllowed {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code: %d for URL: %s, body: %s",
+			resp.StatusCode, resp.Request.URL, string(bodyBytes))
+	}
+
+	// Decode JSON response
+	if target != nil {
+		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
 	}
 
 	return nil
+}
+
+// paginateAllSASTIssues handles paginated requests for SAST issues
+func (c *Client) paginateAllSASTIssues(initialOpts RequestOptions) ([]SASTIssue, error) {
+	type Response struct {
+		Data  []SASTIssue `json:"data"`
+		Links struct {
+			Next string `json:"next,omitempty"`
+		} `json:"links,omitempty"`
+	}
+
+	var allIssues []SASTIssue
+	nextURL := c.buildURL(initialOpts.BaseURL, initialOpts.Path, initialOpts.QueryParams)
+
+	for nextURL != "" {
+		currentOpts := initialOpts
+		if nextURL != c.buildURL(initialOpts.BaseURL, initialOpts.Path, initialOpts.QueryParams) {
+			// Parse the URL to extract path and query parameters
+			parsedURL, err := url.Parse(nextURL)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse next URL: %w", err)
+			}
+
+			currentOpts.Path = parsedURL.Path
+			currentOpts.QueryParams = make(map[string]string)
+			for key, values := range parsedURL.Query() {
+				if len(values) > 0 {
+					currentOpts.QueryParams[key] = values[0]
+				}
+			}
+			currentOpts.BaseURL = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+		}
+
+		resp, err := c.makeRequestWithRetry(currentOpts, 5)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d for URL: %s, body: %s",
+				resp.StatusCode, resp.Request.URL, string(bodyBytes))
+		}
+
+		var response Response
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		resp.Body.Close()
+
+		allIssues = append(allIssues, response.Data...)
+
+		// Check for next page and handle relative URLs
+		if response.Links.Next != "" {
+			if response.Links.Next[0] == '/' {
+				nextURL = strings.Replace(c.RestBaseURL, "/rest", "", 1) + response.Links.Next
+			} else {
+				nextURL = response.Links.Next
+			}
+		} else {
+			nextURL = ""
+		}
+	}
+
+	return allIssues, nil
+}
+
+// paginateAllOrganizations handles paginated requests for organizations
+func (c *Client) paginateAllOrganizations(initialOpts RequestOptions) ([]Organization, error) {
+	type Response struct {
+		Data  []OrganizationResponse `json:"data"`
+		Links struct {
+			Next string `json:"next,omitempty"`
+		} `json:"links,omitempty"`
+	}
+
+	var allOrganizations []Organization
+	nextURL := c.buildURL(initialOpts.BaseURL, initialOpts.Path, initialOpts.QueryParams)
+
+	for nextURL != "" {
+		currentOpts := initialOpts
+		if nextURL != c.buildURL(initialOpts.BaseURL, initialOpts.Path, initialOpts.QueryParams) {
+			// Parse the URL to extract path and query parameters
+			parsedURL, err := url.Parse(nextURL)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse next URL: %w", err)
+			}
+
+			currentOpts.Path = parsedURL.Path
+			currentOpts.QueryParams = make(map[string]string)
+			for key, values := range parsedURL.Query() {
+				if len(values) > 0 {
+					currentOpts.QueryParams[key] = values[0]
+				}
+			}
+			currentOpts.BaseURL = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+		}
+
+		resp, err := c.makeRequestWithRetry(currentOpts, 5)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d for URL: %s, body: %s",
+				resp.StatusCode, resp.Request.URL, string(bodyBytes))
+		}
+
+		var response Response
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		resp.Body.Close()
+
+		// Convert OrganizationResponse to Organization
+		for _, item := range response.Data {
+			org := item.Attributes
+			org.ID = item.ID
+			allOrganizations = append(allOrganizations, org)
+		}
+
+		// Check for next page and handle relative URLs
+		if response.Links.Next != "" {
+			if response.Links.Next[0] == '/' {
+				nextURL = strings.Replace(c.RestBaseURL, "/rest", "", 1) + response.Links.Next
+			} else {
+				nextURL = response.Links.Next
+			}
+		} else {
+			nextURL = ""
+		}
+	}
+
+	return allOrganizations, nil
 }
 
 // debugRequest logs request details if debug is enabled
@@ -261,39 +536,20 @@ func (c *Client) debugResponse(resp *http.Response) {
 
 // GetIgnores retrieves all ignores for a given organization and project
 func (c *Client) GetIgnores(orgID, projectID string) ([]Ignore, error) {
-	url := fmt.Sprintf("%s/org/%s/project/%s/ignores", c.V1BaseURL, orgID, projectID)
-	if c.Debug {
-		fmt.Fprintf(os.Stderr, "Making request to get ignores: %s\n", url)
+	opts := RequestOptions{
+		Method:  "GET",
+		Path:    fmt.Sprintf("/org/%s/project/%s/ignores", orgID, projectID),
+		BaseURL: c.V1BaseURL,
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	if c.Debug {
-		fmt.Fprintf(os.Stderr, "Authorization header set: %s\n", "token "+c.Token[:5]+"...")
-	}
-	c.debugRequest(req, nil)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if err := c.handleResponse(resp); err != nil {
 		return nil, err
 	}
 
 	var response IgnoresResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.handleJSONResponse(resp, &response); err != nil {
+		return nil, err
 	}
 
 	if c.Debug {
@@ -301,7 +557,7 @@ func (c *Client) GetIgnores(orgID, projectID string) ([]Ignore, error) {
 	}
 
 	// Convert map of ignores to slice
-	ignores := make([]Ignore, 0)
+	ignores := make([]Ignore, 0, len(response))
 	for id, ignoreDetails := range response {
 		if len(ignoreDetails) == 0 {
 			continue
@@ -338,109 +594,26 @@ func (c *Client) GetIgnores(orgID, projectID string) ([]Ignore, error) {
 // GetSASTIssues retrieves SAST issues for a given organization and project
 // If projectID is empty, retrieves issues for the entire organization
 func (c *Client) GetSASTIssues(orgID string, projectID string) ([]SASTIssue, error) {
-	baseURL := fmt.Sprintf("%s/orgs/%s/issues?version=2024-10-15&type=code&limit=100", c.RestBaseURL, orgID)
+	queryParams := map[string]string{
+		"version": "2024-10-15",
+		"type":    "code",
+		"limit":   "100",
+	}
 
-	// Add project_id parameter if provided
-	url := baseURL
 	if projectID != "" {
-		url = fmt.Sprintf("%s&project_id=%s", baseURL, projectID)
+		queryParams["project_id"] = projectID
 	}
 
-	// Use getAllSASTIssues to handle pagination
-	return c.getAllSASTIssues(url)
-}
-
-// getAllSASTIssues handles paginated requests for SAST issues
-func (c *Client) getAllSASTIssues(initialURL string) ([]SASTIssue, error) {
-
-	type Response struct {
-		Data  []SASTIssue `json:"data"`
-		Links struct {
-			Next string `json:"next,omitempty"`
-		} `json:"links,omitempty"`
+	opts := RequestOptions{
+		Method:      "GET",
+		Path:        fmt.Sprintf("/orgs/%s/issues", orgID),
+		QueryParams: queryParams,
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
 	}
 
-	var allIssues []SASTIssue
-	nextURL := initialURL
-	retryCount := 0
-	maxRetries := 5
-
-	for nextURL != "" {
-		// Create request
-		req, err := http.NewRequest("GET", nextURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
-
-		req.Header.Set("Authorization", "token "+c.Token)
-		req.Header.Set("Accept", "application/vnd.api+json")
-		c.debugRequest(req, nil)
-
-		// Execute request
-		resp, err := c.HTTPClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute request: %w", err)
-		}
-
-		// Handle rate limiting
-		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close()
-			if retryCount >= maxRetries {
-				return nil, fmt.Errorf("maximum retries exceeded for rate limiting")
-			}
-
-			retryAfter := resp.Header.Get("Retry-After")
-			seconds, err := time.ParseDuration(retryAfter + "s")
-			if err != nil {
-				seconds = 60 * time.Second // default to 60 seconds if header is missing or invalid
-			}
-
-			if c.Debug {
-				fmt.Fprintf(os.Stderr, "Rate limited, waiting for %v seconds before retry\n", seconds.Seconds())
-			}
-
-			time.Sleep(seconds)
-			retryCount++
-			continue
-		}
-
-		if c.Debug {
-			c.debugResponse(resp)
-		}
-
-		// Check for other errors
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, fmt.Errorf("unexpected status code: %d for URL: %s, body: %s",
-				resp.StatusCode, resp.Request.URL, string(body))
-		}
-
-		// Parse response
-		var response Response
-		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to decode response: %w", err)
-		}
-		resp.Body.Close()
-
-		// Process issues
-		allIssues = append(allIssues, response.Data...)
-
-		// Check for next page and handle relative URLs
-		if response.Links.Next != "" {
-			// If the next URL is relative (starts with /), prepend the base URL
-			if response.Links.Next[0] == '/' {
-				nextURL = strings.Replace(c.RestBaseURL, "/rest", "", 1) + response.Links.Next
-			} else {
-				nextURL = response.Links.Next
-			}
-		} else {
-			nextURL = ""
-		}
-	}
-
-	return allIssues, nil
+	return c.paginateAllSASTIssues(opts)
 }
 
 // Project represents a Snyk project from the REST API
@@ -484,34 +657,27 @@ type ProjectsResponse struct {
 
 // GetProjects retrieves all projects for a given organization using the REST API
 func (c *Client) GetProjects(orgID string) ([]Project, error) {
-	url := fmt.Sprintf("%s/orgs/%s/projects?version=2024-10-15&types=sast&limit=100", c.RestBaseURL, orgID)
+	opts := RequestOptions{
+		Method: "GET",
+		Path:   fmt.Sprintf("/orgs/%s/projects", orgID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+			"types":   "sast",
+			"limit":   "100",
+		},
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
+	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, nil)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if err := c.handleResponse(resp); err != nil {
 		return nil, err
 	}
 
 	var response ProjectsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.handleJSONResponse(resp, &response); err != nil {
+		return nil, err
 	}
 
 	projects := make([]Project, len(response.Data))
@@ -540,30 +706,19 @@ func (c *Client) GetProjects(orgID string) ([]Project, error) {
 // struct so that the rest of the codebase (e.g. RetestProject) continues to
 // work unchanged.
 func (c *Client) GetProjectTarget(orgID, targetID string) (*Target, error) {
-	// Fetch the target details directly using the provided targetID.
+	opts := RequestOptions{
+		Method: "GET",
+		Path:   fmt.Sprintf("/orgs/%s/targets/%s", orgID, targetID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+		},
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
+	}
 
-	targetURL := fmt.Sprintf("%s/orgs/%s/targets/%s?version=2024-10-15", c.RestBaseURL, orgID, targetID)
-
-	tReq, err := http.NewRequest("GET", targetURL, nil)
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create target request: %w", err)
-	}
-
-	tReq.Header.Set("Authorization", "token "+c.Token)
-	tReq.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(tReq, nil)
-
-	tResp, err := c.HTTPClient.Do(tReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute target request: %w", err)
-	}
-	defer tResp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(tResp)
-	}
-
-	if err := c.handleResponse(tResp); err != nil {
 		return nil, err
 	}
 
@@ -592,8 +747,8 @@ func (c *Client) GetProjectTarget(orgID, targetID string) (*Target, error) {
 		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(tResp.Body).Decode(&targetResp); err != nil {
-		return nil, fmt.Errorf("failed to decode target response: %w", err)
+	if err := c.handleJSONResponse(resp, &targetResp); err != nil {
+		return nil, err
 	}
 
 	attrs := targetResp.Data.Attributes
@@ -638,34 +793,21 @@ func (c *Client) RetestProject(orgID string, target *Target) error {
 		return fmt.Errorf("target missing integration_id – cannot trigger import")
 	}
 
-	url := fmt.Sprintf("%s/org/%s/integrations/%s/import", c.V1BaseURL, orgID, integrationID)
-
-	// Create appropriate import payload based on target information
-	payload := c.createImportPayload(target)
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal import payload: %w", err)
+	opts := RequestOptions{
+		Method:  "POST",
+		Path:    fmt.Sprintf("/org/%s/integrations/%s/import", orgID, integrationID),
+		BaseURL: c.V1BaseURL,
+		Body:    c.createImportPayload(target),
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Content-Type", "application/json")
-	c.debugRequest(req, body)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
@@ -699,31 +841,18 @@ func (c *Client) createImportPayload(target *Target) interface{} {
 
 // DeleteIgnore deletes an ignore
 func (c *Client) DeleteIgnore(orgID, projectID, ignoreID string) error {
-	url := fmt.Sprintf("%s/org/%s/project/%s/ignore/%s", c.V1BaseURL, orgID, projectID, ignoreID)
+	opts := RequestOptions{
+		Method:  "DELETE",
+		Path:    fmt.Sprintf("/org/%s/project/%s/ignore/%s", orgID, projectID, ignoreID),
+		BaseURL: c.V1BaseURL,
+	}
 
-	req, err := http.NewRequest("DELETE", url, nil)
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
 
-	req.Header.Set("Authorization", "token "+c.Token)
-	c.debugRequest(req, nil)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
-	}
-
-	return nil
+	return c.handleJSONResponse(resp, nil, http.StatusNoContent, http.StatusOK)
 }
 
 // UserIdentity represents the user who created/modified an entity in policy responses.
@@ -830,47 +959,32 @@ type UpdatePolicyPayload struct {
 
 // GetPolicies retrieves all policies for a given organization
 func (c *Client) GetPolicies(orgID string, options map[string]string) ([]Policy, error) {
-	url := fmt.Sprintf("%s/orgs/%s/policies?version=2024-10-15", c.RestBaseURL, orgID)
+	queryParams := map[string]string{
+		"version": "2024-10-15",
+	}
 
 	// Add query parameters from options
-	if len(options) > 0 {
-		query := ""
-		for key, value := range options {
-			if query == "" {
-				query = fmt.Sprintf("&%s=%s", key, value)
-			} else {
-				query = fmt.Sprintf("%s&%s=%s", query, key, value)
-			}
-		}
-		url += query
+	for key, value := range options {
+		queryParams[key] = value
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	opts := RequestOptions{
+		Method:      "GET",
+		Path:        fmt.Sprintf("/orgs/%s/policies", orgID),
+		QueryParams: queryParams,
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
+	}
+
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, nil)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if err := c.handleResponse(resp); err != nil {
 		return nil, err
 	}
 
 	var response PoliciesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.handleJSONResponse(resp, &response); err != nil {
+		return nil, err
 	}
 
 	policies := make([]Policy, len(response.Data))
@@ -884,36 +998,27 @@ func (c *Client) GetPolicies(orgID string, options map[string]string) ([]Policy,
 
 // GetPolicy retrieves a specific policy by ID
 func (c *Client) GetPolicy(orgID, policyID string) (*Policy, error) {
-	url := fmt.Sprintf("%s/orgs/%s/policies/%s?version=2024-10-15", c.RestBaseURL, orgID, policyID)
+	opts := RequestOptions{
+		Method: "GET",
+		Path:   fmt.Sprintf("/orgs/%s/policies/%s", orgID, policyID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+		},
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
+	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, nil)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if err := c.handleResponse(resp); err != nil {
 		return nil, err
 	}
 
 	var response struct {
 		Data PolicyResponse `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.handleJSONResponse(resp, &response); err != nil {
+		return nil, err
 	}
 
 	policy := response.Data.Attributes
@@ -928,37 +1033,29 @@ func (c *Client) GetPolicy(orgID, policyID string) (*Policy, error) {
 // it will be treated as a successful operation rather than an error.
 // This allows migration operations to be safely re-run.
 func (c *Client) CreatePolicy(orgID string, attributes CreatePolicyAttributes, meta map[string]interface{}) (*Policy, error) {
-	url := fmt.Sprintf("%s/orgs/%s/policies?version=2024-10-15", c.RestBaseURL, orgID)
-
 	payload := CreatePolicyPayload{}
 	payload.Data.Type = "policy"
 	payload.Data.Attributes = attributes
 	payload.Data.Meta = meta
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal policy payload: %w", err)
+	opts := RequestOptions{
+		Method: "POST",
+		Path:   fmt.Sprintf("/orgs/%s/policies", orgID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+		},
+		Body: payload,
+		Headers: map[string]string{
+			"Content-Type": "application/vnd.api+json",
+			"Accept":       "application/vnd.api+json",
+		},
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Content-Type", "application/vnd.api+json")
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, body)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
 
 	// Handle both successful creation (201) and conflict (409) as success
 	// A 409 conflict indicates the policy already exists, which is acceptable for idempotent operation
@@ -1001,48 +1098,35 @@ func (c *Client) CreatePolicy(orgID string, attributes CreatePolicyAttributes, m
 
 // UpdatePolicy updates an existing policy
 func (c *Client) UpdatePolicy(orgID string, policyID string, attributes UpdatePolicyAttributes, meta map[string]interface{}) (*Policy, error) {
-	url := fmt.Sprintf("%s/orgs/%s/policies/%s?version=2024-10-15", c.RestBaseURL, orgID, policyID)
-
 	payload := UpdatePolicyPayload{}
 	payload.Data.Type = "policy"
 	payload.Data.ID = policyID
 	payload.Data.Attributes = attributes
 	payload.Data.Meta = meta
 
-	body, err := json.Marshal(payload)
+	opts := RequestOptions{
+		Method: "PATCH",
+		Path:   fmt.Sprintf("/orgs/%s/policies/%s", orgID, policyID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+		},
+		Body: payload,
+		Headers: map[string]string{
+			"Content-Type": "application/vnd.api+json",
+			"Accept":       "application/vnd.api+json",
+		},
+	}
+
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal policy payload: %w", err)
-	}
-
-	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Content-Type", "application/vnd.api+json")
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, body)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
+		return nil, err
 	}
 
 	var response struct {
 		Data PolicyResponse `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.handleJSONResponse(resp, &response); err != nil {
+		return nil, err
 	}
 
 	policy := response.Data.Attributes
@@ -1052,30 +1136,72 @@ func (c *Client) UpdatePolicy(orgID string, policyID string, attributes UpdatePo
 
 // DeletePolicy deletes a policy
 func (c *Client) DeletePolicy(orgID string, policyID string) error {
-	url := fmt.Sprintf("%s/orgs/%s/policies/%s?version=2024-10-15", c.RestBaseURL, orgID, policyID)
+	opts := RequestOptions{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/orgs/%s/policies/%s", orgID, policyID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+		},
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
+	}
 
-	req, err := http.NewRequest("DELETE", url, nil)
+	resp, err := c.makeRequest(opts)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
 
-	req.Header.Set("Authorization", "token "+c.Token)
-	req.Header.Set("Accept", "application/vnd.api+json")
-	c.debugRequest(req, nil)
+	return c.handleJSONResponse(resp, nil, http.StatusNoContent)
+}
 
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
+// Organization represents a Snyk organization from the groups API
+type Organization struct {
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Slug                  string    `json:"slug"`
+	GroupID               string    `json:"group_id"`
+	IsPersonal            bool      `json:"is_personal"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+	AccessRequestsEnabled bool      `json:"access_requests_enabled"`
+}
+
+// OrganizationResponse represents a single organization in the JSON:API response
+type OrganizationResponse struct {
+	ID         string       `json:"id"`
+	Type       string       `json:"type"`
+	Attributes Organization `json:"attributes"`
+}
+
+// OrganizationsResponse represents the JSON:API response for organizations in a group
+type OrganizationsResponse struct {
+	Data    []OrganizationResponse `json:"data"`
+	JSONAPI struct {
+		Version string `json:"version"`
+	} `json:"jsonapi"`
+	Links struct {
+		First string `json:"first,omitempty"`
+		Last  string `json:"last,omitempty"`
+		Next  string `json:"next,omitempty"`
+		Prev  string `json:"prev,omitempty"`
+		Self  string `json:"self,omitempty"`
+	} `json:"links"`
+}
+
+// GetOrganizationsInGroup retrieves all organizations for a given group using the REST API
+func (c *Client) GetOrganizationsInGroup(groupID string) ([]Organization, error) {
+	opts := RequestOptions{
+		Method: "GET",
+		Path:   fmt.Sprintf("/groups/%s/orgs", groupID),
+		QueryParams: map[string]string{
+			"version": "2024-10-15",
+			"limit":   "100",
+		},
+		Headers: map[string]string{
+			"Accept": "application/vnd.api+json",
+		},
 	}
-	defer resp.Body.Close()
 
-	if c.Debug {
-		c.debugResponse(resp)
-	}
-
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("unexpected status code: %d for URL: %s", resp.StatusCode, resp.Request.URL)
-	}
-
-	return nil
+	return c.paginateAllOrganizations(opts)
 }

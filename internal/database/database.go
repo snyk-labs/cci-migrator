@@ -132,6 +132,18 @@ func initSchema(db *sql.DB) error {
 		created_at TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS organizations (
+		id TEXT PRIMARY KEY,
+		group_id TEXT,
+		name TEXT,
+		slug TEXT,
+		is_personal BOOLEAN,
+		created_at TIMESTAMP,
+		updated_at TIMESTAMP,
+		access_requests_enabled BOOLEAN,
+		collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE TABLE IF NOT EXISTS collection_metadata (
 		id INTEGER PRIMARY KEY,
 		collection_completed_at TIMESTAMP,
@@ -145,6 +157,7 @@ func initSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_issues_org_project ON issues(org_id, project_id);
 	CREATE INDEX IF NOT EXISTS idx_policies_asset_key ON policies(asset_key);
 	CREATE INDEX IF NOT EXISTS idx_projects_org_id ON projects(org_id);
+	CREATE INDEX IF NOT EXISTS idx_organizations_group_id ON organizations(group_id);
 	`
 
 	_, err := db.Exec(schema)
@@ -201,6 +214,19 @@ type Policy struct {
 	SourceIgnores string     `json:"source_ignores"`
 	ExternalID    string     `json:"external_id"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
+}
+
+// Organization represents a row in the organizations table
+type Organization struct {
+	ID                    string    `json:"id"`
+	GroupID               string    `json:"group_id"`
+	Name                  string    `json:"name"`
+	Slug                  string    `json:"slug"`
+	IsPersonal            bool      `json:"is_personal"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+	AccessRequestsEnabled bool      `json:"access_requests_enabled"`
+	CollectedAt           time.Time `json:"collected_at"`
 }
 
 // InsertIgnore inserts a new ignore into the database
@@ -434,4 +460,80 @@ func (db *DB) GetPoliciesByOrgID(orgID string) ([]*Policy, error) {
 	}
 
 	return policies, rows.Err()
+}
+
+// InsertOrganization inserts a new organization into the database
+func (db *DB) InsertOrganization(org *Organization) error {
+	query := `
+		INSERT INTO organizations (
+			id, group_id, name, slug, is_personal, created_at, updated_at, access_requests_enabled, collected_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			group_id = excluded.group_id,
+			name = excluded.name,
+			slug = excluded.slug,
+			is_personal = excluded.is_personal,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at,
+			access_requests_enabled = excluded.access_requests_enabled,
+			collected_at = excluded.collected_at
+	`
+
+	_, err := db.DB.Exec(query,
+		org.ID, org.GroupID, org.Name, org.Slug, org.IsPersonal,
+		org.CreatedAt, org.UpdatedAt, org.AccessRequestsEnabled, org.CollectedAt,
+	)
+	return err
+}
+
+// GetOrganizationsByGroupID retrieves all organizations for a given group
+func (db *DB) GetOrganizationsByGroupID(groupID string) ([]*Organization, error) {
+	query := `SELECT * FROM organizations WHERE group_id = ? ORDER BY name`
+
+	rows, err := db.DB.Query(query, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var organizations []*Organization
+	for rows.Next() {
+		org := &Organization{}
+		err := rows.Scan(
+			&org.ID, &org.GroupID, &org.Name, &org.Slug, &org.IsPersonal,
+			&org.CreatedAt, &org.UpdatedAt, &org.AccessRequestsEnabled, &org.CollectedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		organizations = append(organizations, org)
+	}
+
+	return organizations, rows.Err()
+}
+
+// GetAllOrganizations retrieves all organizations from the database
+func (db *DB) GetAllOrganizations() ([]*Organization, error) {
+	query := `SELECT * FROM organizations ORDER BY name`
+
+	rows, err := db.DB.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var organizations []*Organization
+	for rows.Next() {
+		org := &Organization{}
+		err := rows.Scan(
+			&org.ID, &org.GroupID, &org.Name, &org.Slug, &org.IsPersonal,
+			&org.CreatedAt, &org.UpdatedAt, &org.AccessRequestsEnabled, &org.CollectedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		organizations = append(organizations, org)
+	}
+
+	return organizations, rows.Err()
 }

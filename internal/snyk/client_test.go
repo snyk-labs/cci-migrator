@@ -742,4 +742,258 @@ var _ = Describe("Snyk Client", func() {
 		})
 	})
 
+	Describe("GetOrganizationsInGroup", func() {
+		It("should retrieve organizations successfully without pagination", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/groups/test-group-id/orgs"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+				Expect(r.URL.Query().Get("version")).To(Equal("2024-10-15"))
+				Expect(r.URL.Query().Get("limit")).To(Equal("100"))
+
+				response := OrganizationsResponse{
+					Data: []OrganizationResponse{
+						{
+							ID:   "org-1",
+							Type: "organization",
+							Attributes: Organization{
+								Name:                  "Test Organization 1",
+								Slug:                  "test-org-1",
+								GroupID:               "test-group-id",
+								IsPersonal:            false,
+								CreatedAt:             time.Now(),
+								UpdatedAt:             time.Now(),
+								AccessRequestsEnabled: true,
+							},
+						},
+						{
+							ID:   "org-2",
+							Type: "organization",
+							Attributes: Organization{
+								Name:                  "Test Organization 2",
+								Slug:                  "test-org-2",
+								GroupID:               "test-group-id",
+								IsPersonal:            false,
+								CreatedAt:             time.Now(),
+								UpdatedAt:             time.Now(),
+								AccessRequestsEnabled: false,
+							},
+						},
+					},
+					JSONAPI: struct {
+						Version string `json:"version"`
+					}{
+						Version: "1.0",
+					},
+					Links: struct {
+						First string `json:"first,omitempty"`
+						Last  string `json:"last,omitempty"`
+						Next  string `json:"next,omitempty"`
+						Prev  string `json:"prev,omitempty"`
+						Self  string `json:"self,omitempty"`
+					}{
+						Self: "/groups/test-group-id/orgs",
+					},
+				}
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			orgs, err := client.GetOrganizationsInGroup("test-group-id")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(orgs).To(HaveLen(2))
+
+			Expect(orgs[0].ID).To(Equal("org-1"))
+			Expect(orgs[0].Name).To(Equal("Test Organization 1"))
+			Expect(orgs[0].Slug).To(Equal("test-org-1"))
+			Expect(orgs[0].GroupID).To(Equal("test-group-id"))
+			Expect(orgs[0].IsPersonal).To(BeFalse())
+			Expect(orgs[0].AccessRequestsEnabled).To(BeTrue())
+
+			Expect(orgs[1].ID).To(Equal("org-2"))
+			Expect(orgs[1].Name).To(Equal("Test Organization 2"))
+			Expect(orgs[1].Slug).To(Equal("test-org-2"))
+			Expect(orgs[1].AccessRequestsEnabled).To(BeFalse())
+		})
+
+		It("should handle pagination correctly", func() {
+			requestCount := 0
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+				requestCount++
+				var response interface{}
+
+				switch requestCount {
+				case 1:
+					// First page
+					Expect(r.URL.Path).To(Equal("/groups/test-group-id/orgs"))
+					Expect(r.URL.Query().Get("version")).To(Equal("2024-10-15"))
+					Expect(r.URL.Query().Get("limit")).To(Equal("100"))
+
+					response = map[string]interface{}{
+						"data": []map[string]interface{}{
+							{
+								"id":   "org-page1-1",
+								"type": "organization",
+								"attributes": map[string]interface{}{
+									"name":                    "Page 1 Org 1",
+									"slug":                    "page1-org1",
+									"group_id":                "test-group-id",
+									"is_personal":             false,
+									"created_at":              time.Now().Format(time.RFC3339),
+									"updated_at":              time.Now().Format(time.RFC3339),
+									"access_requests_enabled": true,
+								},
+							},
+						},
+						"links": map[string]interface{}{
+							"next": "/groups/test-group-id/orgs?starting_after=cursor1&limit=100",
+						},
+						"jsonapi": map[string]interface{}{
+							"version": "1.0",
+						},
+					}
+				case 2:
+					// Second page
+					Expect(r.URL.Path).To(Equal("/groups/test-group-id/orgs"))
+					Expect(r.URL.Query().Get("starting_after")).To(Equal("cursor1"))
+					Expect(r.URL.Query().Get("limit")).To(Equal("100"))
+
+					response = map[string]interface{}{
+						"data": []map[string]interface{}{
+							{
+								"id":   "org-page2-1",
+								"type": "organization",
+								"attributes": map[string]interface{}{
+									"name":                    "Page 2 Org 1",
+									"slug":                    "page2-org1",
+									"group_id":                "test-group-id",
+									"is_personal":             false,
+									"created_at":              time.Now().Format(time.RFC3339),
+									"updated_at":              time.Now().Format(time.RFC3339),
+									"access_requests_enabled": false,
+								},
+							},
+						},
+						"links": map[string]interface{}{
+							// No next link - end of pagination
+						},
+						"jsonapi": map[string]interface{}{
+							"version": "1.0",
+						},
+					}
+				}
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			orgs, err := client.GetOrganizationsInGroup("test-group-id")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(orgs).To(HaveLen(2))
+			Expect(requestCount).To(Equal(2))
+
+			// Verify first page org
+			Expect(orgs[0].ID).To(Equal("org-page1-1"))
+			Expect(orgs[0].Name).To(Equal("Page 1 Org 1"))
+			Expect(orgs[0].AccessRequestsEnabled).To(BeTrue())
+
+			// Verify second page org
+			Expect(orgs[1].ID).To(Equal("org-page2-1"))
+			Expect(orgs[1].Name).To(Equal("Page 2 Org 1"))
+			Expect(orgs[1].AccessRequestsEnabled).To(BeFalse())
+		})
+
+		It("should handle 404 group not found error", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/groups/nonexistent-group/orgs"))
+
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"errors": [{"detail": "Group not found"}]}`))
+			})
+
+			orgs, err := client.GetOrganizationsInGroup("nonexistent-group")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unexpected status code: 404"))
+			Expect(orgs).To(BeNil())
+		})
+
+		It("should handle rate limiting with retry", func() {
+			requestCount := 0
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount++
+
+				if requestCount == 1 {
+					// First request gets rate limited
+					w.Header().Set("Retry-After", "1")
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+
+				// Second request succeeds
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/groups/test-group-id/orgs"))
+
+				response := map[string]interface{}{
+					"data": []map[string]interface{}{
+						{
+							"id":   "org-after-retry",
+							"type": "organization",
+							"attributes": map[string]interface{}{
+								"name":                    "Org After Retry",
+								"slug":                    "org-after-retry",
+								"group_id":                "test-group-id",
+								"is_personal":             false,
+								"created_at":              time.Now().Format(time.RFC3339),
+								"updated_at":              time.Now().Format(time.RFC3339),
+								"access_requests_enabled": true,
+							},
+						},
+					},
+					"jsonapi": map[string]interface{}{
+						"version": "1.0",
+					},
+				}
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			orgs, err := client.GetOrganizationsInGroup("test-group-id")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(orgs).To(HaveLen(1))
+			Expect(orgs[0].ID).To(Equal("org-after-retry"))
+			Expect(requestCount).To(Equal(2))
+		})
+
+		It("should handle empty group (no organizations)", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/groups/empty-group/orgs"))
+
+				response := OrganizationsResponse{
+					Data: []OrganizationResponse{},
+					JSONAPI: struct {
+						Version string `json:"version"`
+					}{
+						Version: "1.0",
+					},
+				}
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			orgs, err := client.GetOrganizationsInGroup("empty-group")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(orgs).To(HaveLen(0))
+		})
+	})
+
 })
