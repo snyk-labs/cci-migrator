@@ -1181,6 +1181,8 @@ type MockClient struct {
 	CreatePolicyFunc            func(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
 	RetestProjectFunc           func(orgID string, target *snyk.Target) error
 	DeleteIgnoreFunc            func(orgID, projectID, ignoreID string) error
+	CreateIgnoreFunc            func(orgID, projectID string, ignore snyk.Ignore) error
+	DeletePolicyFunc            func(orgID string, policyID string) error
 }
 
 func NewMockClient() *MockClient {
@@ -1195,6 +1197,8 @@ func NewMockClient() *MockClient {
 		},
 		RetestProjectFunc: func(orgID string, target *snyk.Target) error { return nil },
 		DeleteIgnoreFunc:  func(orgID, projectID, ignoreID string) error { return nil },
+		CreateIgnoreFunc:  func(orgID, projectID string, ignore snyk.Ignore) error { return nil },
+		DeletePolicyFunc:  func(orgID string, policyID string) error { return nil },
 	}
 }
 
@@ -1232,4 +1236,14 @@ func (m *MockClient) RetestProject(orgID string, target *snyk.Target) error {
 // DeleteIgnore implements the ClientInterface
 func (m *MockClient) DeleteIgnore(orgID, projectID, ignoreID string) error {
 	return m.DeleteIgnoreFunc(orgID, projectID, ignoreID)
+}
+
+// DeletePolicy implements the ClientInterface
+func (m *MockClient) DeletePolicy(orgID string, policyID string) error {
+	return m.DeletePolicyFunc(orgID, policyID)
+}
+
+// CreateIgnore implements the ClientInterface
+func (m *MockClient) CreateIgnore(orgID string, projectID string, ignore snyk.Ignore) error {
+	return m.CreateIgnoreFunc(orgID, projectID, ignore)
 }

@@ -54,6 +54,8 @@ type ClientInterface interface {
 	CreatePolicy(orgID string, attributes snyk.CreatePolicyAttributes, meta map[string]interface{}) (*snyk.Policy, error)
 	RetestProject(orgID string, target *snyk.Target) error
 	DeleteIgnore(orgID, projectID, ignoreID string) error
+	DeletePolicy(orgID string, policyID string) error
+	CreateIgnore(orgID string, projectID string, ignore snyk.Ignore) error
 }
 
 // GatherCommand handles the gathering of ignores, issues, and projects

@@ -591,6 +591,43 @@ func (c *Client) GetIgnores(orgID, projectID string) ([]Ignore, error) {
 	return ignores, nil
 }
 
+// CreateIgnore creates an ignore via the v1 API
+func (c *Client) CreateIgnore(orgID, projectID string, ignore Ignore) error {
+	// Prepare request payload
+	type ignoreRequest struct {
+		IgnorePath         string     `json:"ignorePath"`
+		Reason             string     `json:"reason"`
+		ReasonType         string     `json:"reasonType"`
+		DisregardIfFixable bool       `json:"disregardIfFixable"`
+		Expires            *time.Time `json:"expires,omitempty"`
+	}
+	payload := ignoreRequest{
+		IgnorePath:         "*",
+		Reason:             ignore.Reason,
+		ReasonType:         ignore.ReasonType,
+		DisregardIfFixable: ignore.DisregardIfFixable,
+		Expires:            ignore.ExpiresAt,
+	}
+
+	opts := RequestOptions{
+		Method:  "POST",
+		Path:    fmt.Sprintf("/org/%s/project/%s/ignore/%s", orgID, projectID, ignore.ID),
+		BaseURL: c.V1BaseURL,
+		Body:    payload,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+	}
+
+	resp, err := c.makeRequest(opts)
+	if err != nil {
+		return err
+	}
+
+	return c.handleJSONResponse(resp, nil, http.StatusOK)
+}
+
 // GetSASTIssues retrieves SAST issues for a given organization and project
 // If projectID is empty, retrieves issues for the entire organization
 func (c *Client) GetSASTIssues(orgID string, projectID string) ([]SASTIssue, error) {
