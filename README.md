@@ -95,7 +95,8 @@ Commands:
   rollback    Attempt to rollback migration
 
 Global Options:
-  --org-id          Snyk Organization ID
+  --org-id          Snyk Organization ID (run on a single organization)
+  --group-id        Snyk Group ID (run on all organizations in a group)
   --api-token       Snyk API Token
   --api-endpoint    Snyk API endpoint (default: api.snyk.io)
   --db-path         Path to SQLite database (default: ./cci-migration.db)
