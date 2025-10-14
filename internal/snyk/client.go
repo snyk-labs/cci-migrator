@@ -418,6 +418,85 @@ func (c *Client) paginateAllSASTIssues(initialOpts RequestOptions) ([]SASTIssue,
 	return allIssues, nil
 }
 
+// paginateAllProjects handles paginated requests for projects
+func (c *Client) paginateAllProjects(initialOpts RequestOptions) ([]Project, error) {
+	type Response struct {
+		Data  []ProjectResponse `json:"data"`
+		Links struct {
+			Next string `json:"next,omitempty"`
+		} `json:"links,omitempty"`
+	}
+
+	var allProjects []Project
+	nextURL := c.buildURL(initialOpts.BaseURL, initialOpts.Path, initialOpts.QueryParams)
+
+	for nextURL != "" {
+		currentOpts := initialOpts
+		if nextURL != c.buildURL(initialOpts.BaseURL, initialOpts.Path, initialOpts.QueryParams) {
+			// Parse the URL to extract path and query parameters
+			parsedURL, err := url.Parse(nextURL)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse next URL: %w", err)
+			}
+
+			currentOpts.Path = parsedURL.Path
+			currentOpts.QueryParams = make(map[string]string)
+			for key, values := range parsedURL.Query() {
+				if len(values) > 0 {
+					currentOpts.QueryParams[key] = values[0]
+				}
+			}
+			currentOpts.BaseURL = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+		}
+
+		resp, err := c.makeRequestWithRetry(currentOpts, 5)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d for URL: %s, body: %s",
+				resp.StatusCode, resp.Request.URL, string(bodyBytes))
+		}
+
+		var response Response
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		resp.Body.Close()
+
+		// Convert ProjectResponse to Project
+		for _, item := range response.Data {
+			project := item.Attributes
+			project.ID = item.ID // Ensure ID is set from the data object
+
+			// Set the target ID from the relationships section
+			if item.Relationships.Target.Data.ID != "" {
+				project.Target = Target{
+					ID: item.Relationships.Target.Data.ID,
+				}
+			}
+			allProjects = append(allProjects, project)
+		}
+
+		// Check for next page and handle relative URLs
+		if response.Links.Next != "" {
+			if response.Links.Next[0] == '/' {
+				nextURL = strings.Replace(c.RestBaseURL, "/rest", "", 1) + response.Links.Next
+			} else {
+				nextURL = response.Links.Next
+			}
+		} else {
+			nextURL = ""
+		}
+	}
+
+	return allProjects, nil
+}
+
 // paginateAllOrganizations handles paginated requests for organizations
 func (c *Client) paginateAllOrganizations(initialOpts RequestOptions) ([]Organization, error) {
 	type Response struct {
@@ -707,30 +786,7 @@ func (c *Client) GetProjects(orgID string) ([]Project, error) {
 		},
 	}
 
-	resp, err := c.makeRequest(opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var response ProjectsResponse
-	if err := c.handleJSONResponse(resp, &response); err != nil {
-		return nil, err
-	}
-
-	projects := make([]Project, len(response.Data))
-	for i, item := range response.Data {
-		projects[i] = item.Attributes
-		projects[i].ID = item.ID // Ensure ID is set from the data object
-
-		// Set the target ID from the relationships section
-		if item.Relationships.Target.Data.ID != "" {
-			projects[i].Target = Target{
-				ID: item.Relationships.Target.Data.ID,
-			}
-		}
-	}
-
-	return projects, nil
+	return c.paginateAllProjects(opts)
 }
 
 // GetProjectTarget retrieves the target details for a given project. The REST API
