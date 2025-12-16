@@ -1,3 +1,5 @@
+![snyk-oss-category](https://github.com/snyk-labs/oss-images/blob/main/oss-community.jpg)
+
 # CCI Migrator
 
 A CLI tool to migrate Snyk v1 API SAST ignores to Snyk's new Consistent Ignores system using the Policy API.
