@@ -23,6 +23,7 @@ type DatabaseInterface interface {
 	InsertIssue(issue *database.Issue) error
 	InsertProject(project *database.Project) error
 	InsertPolicy(policy *database.Policy) error
+	DeletePoliciesByOrgID(orgID string) error
 	InsertOrganization(org *database.Organization) error
 	GetIssuesByOrgID(orgID string) ([]*database.Issue, error)
 	GetProjectsByOrgID(orgID string) ([]*database.Project, error)
