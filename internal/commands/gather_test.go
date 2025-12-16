@@ -978,6 +978,10 @@ func (m *MockRows) Scan(dest ...interface{}) error {
 				if b, ok := val.(bool); ok {
 					*v = b
 				}
+			case *time.Time:
+				if t, ok := val.(time.Time); ok {
+					*v = t
+				}
 			case **time.Time:
 				if t, ok := val.(*time.Time); ok {
 					*v = t
