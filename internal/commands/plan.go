@@ -35,15 +35,39 @@ func (c *PlanCommand) Execute() error {
 	log.Printf("Starting migration planning for organization: %s", c.orgID)
 
 	// Clean up any existing policies and reset ignore flags to ensure idempotent behavior
+	// Use a transaction to ensure atomicity of both operations
 	log.Printf("Cleaning up existing policies and resetting ignore flags for organization: %s", c.orgID)
 
+	// Begin transaction for atomic cleanup
+	txInterface, err := c.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	// Type assert to get the transaction methods
+	type TxExecutor interface {
+		Exec(query string, args ...interface{}) (interface{}, error)
+		Commit() error
+		Rollback() error
+	}
+	tx := txInterface.(TxExecutor)
+
+	// Ensure rollback on error
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
 	// Delete all existing policies for this organization
-	if err := c.db.DeletePoliciesByOrgID(c.orgID); err != nil {
+	_, err = tx.Exec(`DELETE FROM policies WHERE org_id = ?`, c.orgID)
+	if err != nil {
 		return fmt.Errorf("failed to delete existing policies: %w", err)
 	}
 
 	// Reset internal_policy_id and selected_for_migration flags for all ignores in this organization
-	_, err := c.db.Exec(`
+	_, err = tx.Exec(`
 		UPDATE ignores 
 		SET internal_policy_id = NULL, selected_for_migration = 0 
 		WHERE org_id = ?
@@ -51,6 +75,12 @@ func (c *PlanCommand) Execute() error {
 	if err != nil {
 		return fmt.Errorf("failed to reset ignore flags: %w", err)
 	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit cleanup transaction: %w", err)
+	}
+	committed = true
 
 	log.Printf("Cleanup completed - existing policies deleted and ignore flags reset")
 
