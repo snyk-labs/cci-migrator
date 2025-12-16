@@ -34,6 +34,26 @@ func NewPlanCommand(db DatabaseInterface, client ClientInterface, orgID string, 
 func (c *PlanCommand) Execute() error {
 	log.Printf("Starting migration planning for organization: %s", c.orgID)
 
+	// Clean up any existing policies and reset ignore flags to ensure idempotent behavior
+	log.Printf("Cleaning up existing policies and resetting ignore flags for organization: %s", c.orgID)
+
+	// Delete all existing policies for this organization
+	if err := c.db.DeletePoliciesByOrgID(c.orgID); err != nil {
+		return fmt.Errorf("failed to delete existing policies: %w", err)
+	}
+
+	// Reset internal_policy_id and selected_for_migration flags for all ignores in this organization
+	_, err := c.db.Exec(`
+		UPDATE ignores 
+		SET internal_policy_id = NULL, selected_for_migration = 0 
+		WHERE org_id = ?
+	`, c.orgID)
+	if err != nil {
+		return fmt.Errorf("failed to reset ignore flags: %w", err)
+	}
+
+	log.Printf("Cleanup completed - existing policies deleted and ignore flags reset")
+
 	// Get all ignores with asset keys
 	rows, err := c.db.Query(`
 		SELECT * FROM ignores 
@@ -43,16 +63,40 @@ func (c *PlanCommand) Execute() error {
 		return fmt.Errorf("failed to get ignores with asset keys: %w", err)
 	}
 
-	sqlRows := rows.(*sql.Rows)
-	defer sqlRows.Close()
+	// Handle both real sql.Rows and mock rows
+	defer func() {
+		if closer, ok := rows.(interface{ Close() error }); ok {
+			closer.Close()
+		}
+	}()
 
 	// Group ignores by asset key
 	assetKeyMap := make(map[string][]*database.Ignore)
 	var totalIgnores int
 
-	for sqlRows.Next() {
+	// Use interface{} to work with both real and mock rows
+	var rowScanner interface {
+		Next() bool
+		Scan(dest ...interface{}) error
+	}
+
+	// Try to cast to sql.Rows first, then fall back to interface
+	if sqlRows, ok := rows.(*sql.Rows); ok {
+		rowScanner = sqlRows
+	} else if rows != nil {
+		// For testing with mock rows
+		rowScanner = rows.(interface {
+			Next() bool
+			Scan(dest ...interface{}) error
+		})
+	} else {
+		// If rows is nil (e.g., due to error), we can't proceed
+		return fmt.Errorf("failed to get ignores with asset keys: query returned nil")
+	}
+
+	for rowScanner.Next() {
 		ignore := &database.Ignore{}
-		err := sqlRows.Scan(
+		err := rowScanner.Scan(
 			&ignore.ID, &ignore.IssueID, &ignore.OrgID, &ignore.ProjectID,
 			&ignore.Reason, &ignore.IgnoreType, &ignore.CreatedAt, &ignore.ExpiresAt,
 			&ignore.AssetKey, &ignore.OriginalState,

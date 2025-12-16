@@ -486,6 +486,13 @@ func (db *DB) InsertOrganization(org *Organization) error {
 	return err
 }
 
+// DeletePoliciesByOrgID deletes all policies for a given organization
+func (db *DB) DeletePoliciesByOrgID(orgID string) error {
+	query := `DELETE FROM policies WHERE org_id = ?`
+	_, err := db.DB.Exec(query, orgID)
+	return err
+}
+
 // GetOrganizationsByGroupID retrieves all organizations for a given group
 func (db *DB) GetOrganizationsByGroupID(groupID string) ([]*Organization, error) {
 	query := `SELECT * FROM organizations WHERE group_id = ? ORDER BY name`

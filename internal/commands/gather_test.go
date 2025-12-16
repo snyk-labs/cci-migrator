@@ -958,7 +958,7 @@ func (m *MockRows) Next() bool {
 }
 
 func (m *MockRows) Scan(dest ...interface{}) error {
-	if m.nextIndex == 0 || m.nextIndex > len(m.rows) {
+	if m.nextIndex <= 0 || m.nextIndex > len(m.rows) {
 		return errors.New("invalid row index")
 	}
 
@@ -973,6 +973,14 @@ func (m *MockRows) Scan(dest ...interface{}) error {
 			case *int:
 				if n, ok := val.(int); ok {
 					*v = n
+				}
+			case *bool:
+				if b, ok := val.(bool); ok {
+					*v = b
+				}
+			case **time.Time:
+				if t, ok := val.(*time.Time); ok {
+					*v = t
 				}
 			}
 		}
@@ -1004,6 +1012,7 @@ type MockDB struct {
 	GetIssuesByOrgIDFunc          func(orgID string) ([]*database.Issue, error)
 	GetProjectsByOrgIDFunc        func(orgID string) ([]*database.Project, error)
 	GetPoliciesByOrgIDFunc        func(orgID string) ([]*database.Policy, error)
+	DeletePoliciesByOrgIDFunc     func(orgID string) error
 	GetOrganizationsByGroupIDFunc func(groupID string) ([]*database.Organization, error)
 	GetAllOrganizationsFunc       func() ([]*database.Organization, error)
 	UpdateCollectionMetadataFunc  func(time.Time, string, string) error
@@ -1039,6 +1048,7 @@ func NewMockDB() *MockDB {
 		GetIssuesByOrgIDFunc:          func(orgID string) ([]*database.Issue, error) { return []*database.Issue{}, nil },
 		GetProjectsByOrgIDFunc:        func(orgID string) ([]*database.Project, error) { return []*database.Project{}, nil },
 		GetPoliciesByOrgIDFunc:        func(orgID string) ([]*database.Policy, error) { return []*database.Policy{}, nil },
+		DeletePoliciesByOrgIDFunc:     func(orgID string) error { return nil },
 		GetOrganizationsByGroupIDFunc: func(groupID string) ([]*database.Organization, error) { return []*database.Organization{}, nil },
 		GetAllOrganizationsFunc:       func() ([]*database.Organization, error) { return []*database.Organization{}, nil },
 		UpdateCollectionMetadataFunc:  func(time.Time, string, string) error { return nil },
@@ -1109,6 +1119,11 @@ func (m *MockDB) GetProjectsByOrgID(orgID string) ([]*database.Project, error) {
 // GetPoliciesByOrgID implements the DatabaseInterface
 func (m *MockDB) GetPoliciesByOrgID(orgID string) ([]*database.Policy, error) {
 	return m.GetPoliciesByOrgIDFunc(orgID)
+}
+
+// DeletePoliciesByOrgID implements the DatabaseInterface
+func (m *MockDB) DeletePoliciesByOrgID(orgID string) error {
+	return m.DeletePoliciesByOrgIDFunc(orgID)
 }
 
 // InsertOrganization implements the DatabaseInterface
