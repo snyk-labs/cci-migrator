@@ -996,4 +996,110 @@ var _ = Describe("Snyk Client", func() {
 		})
 	})
 
+	Describe("GetSASTIssues", func() {
+		It("should retrieve SAST issues with ignored=true query parameter", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/orgs/test-org/issues"))
+				Expect(r.Header.Get("Authorization")).To(Equal("token test-token"))
+				Expect(r.Header.Get("Accept")).To(Equal("application/vnd.api+json"))
+
+				query := r.URL.Query()
+				Expect(query.Get("version")).To(Equal("2024-10-15"))
+				Expect(query.Get("type")).To(Equal("code"))
+				Expect(query.Get("limit")).To(Equal("100"))
+				Expect(query.Get("ignored")).To(Equal("true"))
+
+				now := time.Now().UTC()
+				response := map[string]interface{}{
+					"data": []map[string]interface{}{
+						{
+							"id":   "issue-1",
+							"type": "issue",
+							"attributes": map[string]interface{}{
+								"classes": []interface{}{},
+								"coordinates": []interface{}{
+									map[string]interface{}{
+										"is_fixable_manually": false,
+										"is_fixable_snyk":     false,
+										"is_fixable_upstream": false,
+										"representations":     []interface{}{},
+									},
+								},
+								"created_at":               now.Format(time.RFC3339),
+								"description":              "Test issue description",
+								"effective_severity_level": "high",
+								"ignored":                  true,
+								"key":                      "test-project-key-1",
+								"key_asset":                "test-asset-key-1",
+								"problems":                 []interface{}{},
+								"risk":                     map[string]interface{}{"factors": []interface{}{}, "score": map[string]interface{}{"model": "test", "value": 50}},
+								"status":                   "open",
+								"title":                    "Test SAST Issue",
+								"type":                     "code",
+								"updated_at":               now.Format(time.RFC3339),
+							},
+							"relationships": map[string]interface{}{
+								"organization": map[string]interface{}{
+									"data": map[string]interface{}{
+										"id":   "test-org",
+										"type": "org",
+									},
+								},
+								"scan_item": map[string]interface{}{
+									"data": map[string]interface{}{
+										"id":   "test-project-id",
+										"type": "project",
+									},
+								},
+							},
+						},
+					},
+					"links": map[string]interface{}{},
+				}
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			issues, err := client.GetSASTIssues("test-org", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(issues).To(HaveLen(1))
+
+			issue := issues[0]
+			Expect(issue.ID).To(Equal("issue-1"))
+			Expect(issue.Type).To(Equal("issue"))
+			Expect(issue.Attributes.Key).To(Equal("test-project-key-1"))
+			Expect(issue.Attributes.KeyAsset).To(Equal("test-asset-key-1"))
+			Expect(issue.Attributes.Title).To(Equal("Test SAST Issue"))
+			Expect(issue.Relationships.ScanItem.Data.ID).To(Equal("test-project-id"))
+		})
+
+		It("should include project_id query parameter when projectID is provided", func() {
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal("GET"))
+				Expect(r.URL.Path).To(Equal("/orgs/test-org/issues"))
+
+				query := r.URL.Query()
+				Expect(query.Get("version")).To(Equal("2024-10-15"))
+				Expect(query.Get("type")).To(Equal("code"))
+				Expect(query.Get("limit")).To(Equal("100"))
+				Expect(query.Get("ignored")).To(Equal("true"))
+				Expect(query.Get("project_id")).To(Equal("specific-project-id"))
+
+				response := map[string]interface{}{
+					"data":  []interface{}{},
+					"links": map[string]interface{}{},
+				}
+
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				json.NewEncoder(w).Encode(response)
+			})
+
+			issues, err := client.GetSASTIssues("test-org", "specific-project-id")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(issues).To(HaveLen(0))
+		})
+	})
+
 })

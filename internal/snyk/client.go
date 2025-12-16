@@ -714,6 +714,7 @@ func (c *Client) GetSASTIssues(orgID string, projectID string) ([]SASTIssue, err
 		"version": "2024-10-15",
 		"type":    "code",
 		"limit":   "100",
+		"ignored": "true",
 	}
 
 	if projectID != "" {
