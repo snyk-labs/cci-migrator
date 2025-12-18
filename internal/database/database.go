@@ -178,8 +178,8 @@ type Ignore struct {
 	OriginalState        string     `json:"original_state"`
 	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
 	MigratedAt           *time.Time `json:"migrated_at,omitempty"`
-	PolicyID             string     `json:"policy_id"`
-	InternalPolicyID     string     `json:"internal_policy_id"`
+	PolicyID             *string    `json:"policy_id,omitempty"`
+	InternalPolicyID     *string    `json:"internal_policy_id,omitempty"`
 	SelectedForMigration bool       `json:"selected_for_migration"`
 }
 

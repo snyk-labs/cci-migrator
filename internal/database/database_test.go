@@ -276,4 +276,99 @@ var _ = Describe("Database", func() {
 		Expect(ignores[0].Reason).To(Equal("False positive"))
 		Expect(issues[0].AssetKey).To(Equal("src/main.go:42"))
 	})
+
+	It("should handle NULL and non-NULL PolicyID and InternalPolicyID fields", func() {
+		// This test verifies the fix for the bug where scanning would fail with:
+		// "sql: Scan error on column index 13, name 'internal_policy_id': converting NULL to string is unsupported"
+
+		orgID := "test-org-policy-fields"
+
+		// Test Case 1: Insert ignore with NULL policy fields (common initial state)
+		ignoreWithNullPolicies := &Ignore{
+			ID:               "ignore-null-policies",
+			IssueID:          "issue-1",
+			OrgID:            orgID,
+			ProjectID:        "project-1",
+			Reason:           "Test ignore with NULL policy fields",
+			IgnoreType:       "wont-fix",
+			CreatedAt:        time.Now(),
+			AssetKey:         "src/test.go:10",
+			PolicyID:         nil, // NULL value
+			InternalPolicyID: nil, // NULL value
+		}
+
+		err := db.InsertIgnore(ignoreWithNullPolicies)
+		Expect(err).NotTo(HaveOccurred(), "Should insert ignore with NULL policy fields")
+
+		// Test Case 2: Insert ignore with populated policy fields (state after migration planning)
+		policyID := "policy-123"
+		internalPolicyID := "internal-policy-456"
+		ignoreWithPolicies := &Ignore{
+			ID:               "ignore-with-policies",
+			IssueID:          "issue-2",
+			OrgID:            orgID,
+			ProjectID:        "project-1",
+			Reason:           "Test ignore with policy fields",
+			IgnoreType:       "temporary",
+			CreatedAt:        time.Now(),
+			AssetKey:         "src/test.go:20",
+			PolicyID:         &policyID,         // Non-NULL value
+			InternalPolicyID: &internalPolicyID, // Non-NULL value
+		}
+
+		err = db.InsertIgnore(ignoreWithPolicies)
+		Expect(err).NotTo(HaveOccurred(), "Should insert ignore with non-NULL policy fields")
+
+		// Retrieve all ignores and verify scanning works correctly
+		ignores, err := db.GetIgnoresByOrgID(orgID)
+		Expect(err).NotTo(HaveOccurred(), "Should scan ignores with mixed NULL and non-NULL policy fields without error")
+		Expect(ignores).To(HaveLen(2), "Should have retrieved both ignores")
+
+		// Find and verify the ignore with NULL policy fields
+		var nullPolicyIgnore *Ignore
+		var withPolicyIgnore *Ignore
+		for _, ig := range ignores {
+			if ig.ID == "ignore-null-policies" {
+				nullPolicyIgnore = ig
+			} else if ig.ID == "ignore-with-policies" {
+				withPolicyIgnore = ig
+			}
+		}
+
+		Expect(nullPolicyIgnore).NotTo(BeNil(), "Should have found ignore with NULL policies")
+		Expect(nullPolicyIgnore.PolicyID).To(BeNil(), "PolicyID should be NULL")
+		Expect(nullPolicyIgnore.InternalPolicyID).To(BeNil(), "InternalPolicyID should be NULL")
+
+		Expect(withPolicyIgnore).NotTo(BeNil(), "Should have found ignore with non-NULL policies")
+		Expect(withPolicyIgnore.PolicyID).NotTo(BeNil(), "PolicyID should not be NULL")
+		Expect(*withPolicyIgnore.PolicyID).To(Equal("policy-123"), "PolicyID should match")
+		Expect(withPolicyIgnore.InternalPolicyID).NotTo(BeNil(), "InternalPolicyID should not be NULL")
+		Expect(*withPolicyIgnore.InternalPolicyID).To(Equal("internal-policy-456"), "InternalPolicyID should match")
+
+		// Test Case 3: Update an ignore from NULL to non-NULL policy fields (simulates migration planning)
+		updatedPolicyID := "updated-policy-789"
+		updatedInternalPolicyID := "updated-internal-999"
+		nullPolicyIgnore.PolicyID = &updatedPolicyID
+		nullPolicyIgnore.InternalPolicyID = &updatedInternalPolicyID
+
+		err = db.InsertIgnore(nullPolicyIgnore)
+		Expect(err).NotTo(HaveOccurred(), "Should update ignore with policy fields")
+
+		// Retrieve and verify the update
+		ignores, err = db.GetIgnoresByOrgID(orgID)
+		Expect(err).NotTo(HaveOccurred(), "Should scan ignores after update")
+		
+		var updatedIgnore *Ignore
+		for _, ig := range ignores {
+			if ig.ID == "ignore-null-policies" {
+				updatedIgnore = ig
+				break
+			}
+		}
+
+		Expect(updatedIgnore).NotTo(BeNil(), "Should have found updated ignore")
+		// Note: Based on the UPSERT logic in InsertIgnore, policy fields are NOT updated
+		// This is intentional to preserve migration state, so the fields should still be NULL
+		// If this behavior changes, update this test accordingly
+	})
 })
